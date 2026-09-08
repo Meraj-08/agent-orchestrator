@@ -31,6 +31,7 @@ import {
 	Fragment,
 	memo,
 	useContext,
+	useMemo,
 	useState,
 	type ReactNode,
 } from "react";
@@ -40,8 +41,12 @@ import { WrapText } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { canonicalLanguage } from "../../lib/code-highlight";
 import { fenceOf } from "../../lib/markdown-fence";
-import { isWebLink, isWorkspaceFileLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
+import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
 import { AppLink } from "../AppLink";
+import {
+	explicitWorkspaceFilePath,
+	findWorkspaceFilePath,
+} from "../../lib/workspace-file-path";
 import { HighlightedCode } from "./HighlightedCode";
 import { MermaidBlock } from "./MermaidBlock";
 import { CopyButton } from "./CopyButton";
@@ -73,18 +78,33 @@ const PLUGINS = [remarkGfm];
  * and re-parse every message on every poll.
  */
 const StreamingProse = createContext(false);
-const OpenChatLink = createContext<{ open?: (url: string) => void; workspacePaths: string[] }>({ workspacePaths: [] });
+const InsideMarkdownLink = createContext(false);
+const OpenChatLink = createContext<{
+	filePaths: readonly string[];
+	onFileOpen?: (path: string) => void;
+	open?: (url: string) => void;
+}>({ filePaths: [] });
 
 export function ChatLinkProvider({
 	onLinkOpen,
-	workspacePaths = [],
+	onFileOpen,
+	filePaths = [],
 	children,
 }: {
 	onLinkOpen?: (url: string) => void;
-	workspacePaths?: string[];
+	onFileOpen?: (path: string) => void;
+	filePaths?: readonly string[];
 	children: ReactNode;
 }) {
-	return <OpenChatLink.Provider value={{ open: onLinkOpen, workspacePaths }}>{children}</OpenChatLink.Provider>;
+	const navigation = useMemo(
+		() => ({ filePaths, onFileOpen, open: onLinkOpen }),
+		[filePaths, onFileOpen, onLinkOpen],
+	);
+	return (
+		<OpenChatLink.Provider value={navigation}>
+			{children}
+		</OpenChatLink.Provider>
+	);
 }
 
 export const ChatMarkdown = memo(function ChatMarkdown({
@@ -210,14 +230,23 @@ function compactEmoji(children: ReactNode): ReactNode {
 }
 
 function MarkdownLink({ href, children }: { href?: string; children?: ReactNode }) {
-	const { open: onLinkOpen, workspacePaths } = useContext(OpenChatLink);
+	const { filePaths, onFileOpen, open: onLinkOpen } = useContext(OpenChatLink);
+	const filePath = href && onFileOpen
+		? findWorkspaceFilePath(href, filePaths) ?? explicitWorkspaceFilePath(href)
+		: undefined;
 	return (
 		<AppLink
 			href={href}
 			onBrowserOpen={onLinkOpen}
-			inAppLink={href ? (url) => isWebLink(url) || isWorkspaceFileLink(url, workspacePaths) : undefined}
+			inAppLink={isWebLink}
 			onClick={(event) => {
-				if (href && !isWebLink(href) && !isWorkspaceFileLink(href, workspacePaths)) {
+				if (!href) return;
+				if (filePath && onFileOpen) {
+					event.preventDefault();
+					onFileOpen(filePath);
+					return;
+				}
+				if (!isWebLink(href)) {
 					event.preventDefault();
 					void openLinkInSystemBrowser(href);
 				}
@@ -242,6 +271,29 @@ function MermaidFence({ code }: { code: string }) {
 	const streaming = useContext(StreamingProse);
 	const { open: onLinkOpen } = useContext(OpenChatLink);
 	return <MermaidBlock code={code} streaming={streaming} onLinkOpen={onLinkOpen} />;
+}
+
+function InlineCode({ children }: { children?: ReactNode }) {
+	const { filePaths, onFileOpen } = useContext(OpenChatLink);
+	const insideLink = useContext(InsideMarkdownLink);
+	const text = typeof children === "string" ? children : undefined;
+	const filePath = text && onFileOpen ? findWorkspaceFilePath(text, filePaths) : undefined;
+	const code = (
+		<code className="rounded bg-surface px-[5px] py-[2px] font-mono text-[11.5px] text-markdown-code">
+			{children}
+		</code>
+	);
+	if (!filePath || !onFileOpen || insideLink) return code;
+	return (
+		<button
+			type="button"
+			onClick={() => onFileOpen(filePath)}
+			aria-label={`Open ${filePath} in Files`}
+			className="inline rounded text-left transition-colors hover:bg-interactive-hover"
+		>
+			{code}
+		</button>
+	);
 }
 
 const COMPONENTS: Components = {
@@ -306,11 +358,7 @@ const COMPONENTS: Components = {
 		return <CodeBlock code={fence.code} language={fence.language} />;
 	},
 	// Only inline code reaches here; `pre` above takes every fence.
-	code: ({ children }) => (
-		<code className="rounded bg-surface px-[5px] py-[2px] font-mono text-[11.5px] text-markdown-code">
-			{children}
-		</code>
-	),
+	code: InlineCode,
 
 	// Wide tables scroll inside their own container so the conversation column
 	// never scrolls sideways.
