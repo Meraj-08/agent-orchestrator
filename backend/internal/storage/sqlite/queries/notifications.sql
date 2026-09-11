@@ -166,3 +166,8 @@ WHERE dismissed_at IS NULL;
 DELETE FROM notifications
 WHERE dismissed_at IS NOT NULL
   AND resolved_at IS NOT NULL;
+
+-- name: DeleteNotification :one
+DELETE FROM notifications
+WHERE id = ?
+RETURNING *;
