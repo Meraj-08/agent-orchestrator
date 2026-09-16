@@ -164,7 +164,10 @@ func seedKimiCredential(sourcePath, targetPath string) error {
 	}
 	status, ok, err := kimiCredentialsAuthStatus(sourcePath)
 	if err != nil {
-		return fmt.Errorf("read source Kimi credentials %s: %w", sourcePath, err)
+		// Kimi treats unreadable credential files as absent. Do not copy
+		// malformed data; config auth detection will still allow a keyring
+		// profile to seed its non-secret provider mapping.
+		return nil //nolint:nilerr // Kimi treats unreadable credential files as absent.
 	}
 	if !ok || status != ports.AgentAuthStatusAuthorized {
 		return nil

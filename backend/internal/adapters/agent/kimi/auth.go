@@ -216,7 +216,13 @@ func kimiConfigAuthStatus(path string) (ports.AgentAuthStatus, bool, error) {
 		credentialPath := kimiOAuthCredentialPath(filepath.Dir(path), provider.OAuth.Key)
 		status, found, err := kimiCredentialsAuthStatus(credentialPath)
 		if err != nil {
-			return status, found, err
+			// Kimi treats unreadable credential files as missing and falls back
+			// to the keyring for legacy keyring-backed profiles. Keep returning
+			// file errors for file-backed profiles so their failure is visible.
+			if !strings.EqualFold(strings.TrimSpace(provider.OAuth.Storage), "keyring") {
+				return status, found, err
+			}
+			status, found = ports.AgentAuthStatusUnknown, false
 		}
 		if found {
 			if status == ports.AgentAuthStatusAuthorized {
