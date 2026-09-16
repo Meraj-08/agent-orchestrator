@@ -2026,5 +2026,9 @@
 	"settings.cloudAgents.github.saving": "Saving…",
 	"settings.cloudAgents.github.remove": "Remove",
 	"settings.cloudAgents.github.errorSave": "Could not save the GitHub token.",
-	"settings.cloudAgents.github.errorRemove": "Could not remove the GitHub token."
+	"settings.cloudAgents.github.errorRemove": "Could not remove the GitHub token.",
+	"executionContext.active": "活跃",
+	"executionContext.configured": "已配置",
+	"executionContext.title": "执行上下文",
+	"executionContext.loading": "正在加载项目上下文…"
 }

@@ -2074,5 +2074,9 @@
 	"settings.cloudAgents.github.saving": "Saving…",
 	"settings.cloudAgents.github.remove": "Remove",
 	"settings.cloudAgents.github.errorSave": "Could not save the GitHub token.",
-	"settings.cloudAgents.github.errorRemove": "Could not remove the GitHub token."
+	"settings.cloudAgents.github.errorRemove": "Could not remove the GitHub token.",
+	"executionContext.active": "activo",
+	"executionContext.configured": "configurado",
+	"executionContext.title": "contexto de ejecución",
+	"executionContext.loading": "cargando el contexto del proyecto…"
 }

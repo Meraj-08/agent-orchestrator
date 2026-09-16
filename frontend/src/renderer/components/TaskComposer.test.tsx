@@ -194,6 +194,9 @@ describe("TaskComposer", () => {
 
 		expect(startTask()).toBeDisabled();
 		expect(screen.getByRole("status", { name: "loading project context…" })).toBeInTheDocument();
+		fireEvent.change(task(), { target: { value: "should wait" } });
+		fireEvent.keyDown(task(), { key: "Enter", shiftKey: false, altKey: false });
+		expect(h.post).not.toHaveBeenCalled();
 
 		await act(async () =>
 			resolveProject({ data: { status: "ok", project: { name: "my-app", repo: "acme/my-app", defaultBranch: "main", path: "/repo", config: {} } } }),

@@ -24,6 +24,7 @@ import { useSettings } from "../hooks/useSettings";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { useSandboxProviderStore } from "../stores/sandbox-provider-store";
+import { executionContextLabels, projectRepositories } from "../lib/execution-context";
 import { cloudSessionsQueryKey, useCloudProjectsQuery } from "../hooks/useWorkspaceQuery";
 import {
 	agentModelsQueryKey,
@@ -338,6 +339,10 @@ export function TaskComposer({
 		selectedAgent !== "" &&
 		settings?.defaultSessionMode === "chat" &&
 		!settings.chatHarnesses.includes(selectedAgent);
+	const canSubmit =
+		Boolean(projectId) &&
+		(!isStandalone || selectedAgent !== "") &&
+		(isCloudProject || isStandalone || projectQuery.data !== undefined);
 	const refreshSelectedModels = useCallback(async () => {
 		const refreshed = await refreshAgentModels(selectedAgent, modelsProjectId);
 		queryClient.setQueryData(agentModelsQueryKey(selectedAgent, modelsProjectId), refreshed);
@@ -377,17 +382,7 @@ export function TaskComposer({
 			activeRole="worker"
 			baseBranch={projectQuery.data?.defaultBranch ?? cloudProject?.defaultBranch}
 			error={projectQuery.isError ? (projectQuery.error instanceof Error ? projectQuery.error.message : t("newTask.configUnavailable")) : undefined}
-			labels={{
-				active: "active",
-				baseBranch: t("settings.project.defaultBranch"),
-				configured: "configured",
-				executionContext: "execution context",
-				loading: "loading project context…",
-				orchestrator: t("settings.models.orchestratorRole"),
-				path: t("settings.project.path"),
-				repository: t("settings.project.repository"),
-				worker: t("settings.models.workerRole"),
-			}}
+			labels={executionContextLabels(t)}
 			loading={!isCloudProject && !isStandalone && projectQuery.isPending}
 			orchestratorAgent={projectQuery.data?.config?.orchestrator?.agent ? selectedAgentLabelFor(projectQuery.data.config.orchestrator.agent, agentCatalog?.agents) : undefined}
 			path={projectQuery.data?.path}
@@ -402,7 +397,7 @@ export function TaskComposer({
 		interfaceMode?: "tui",
 		approvalMode?: "bypass-permissions",
 	) => {
-		if (!projectId || isSubmitting) return;
+		if (!projectId || !canSubmit || isSubmitting) return;
 
 		const cleanModel = selectedModel.trim();
 		const cleanMode = selectedMode.trim();
@@ -453,7 +448,7 @@ export function TaskComposer({
 	return (
 		<TaskComposerView
 			autoFocusPrompt={autoFocusTitle}
-			canSubmit={Boolean(projectId) && (!isStandalone || selectedAgent !== "") && (isCloudProject || isStandalone || projectQuery.data !== undefined)}
+			canSubmit={canSubmit}
 			context={executionContext}
 			onPromptChange={handlePromptChange}
 			labels={{
@@ -537,11 +532,6 @@ export function TaskComposer({
 			)}
 		/>
 	);
-}
-
-function projectRepositories(project: Project | undefined): string[] {
-	if (!project) return [];
-	return [...new Set([project.repo, ...(project.workspaceRepos ?? []).map((repo) => repo.repo)].filter(Boolean))];
 }
 
 function selectedAgentLabelFor(agent: string, catalog?: Array<{ id: string; label: string }>): string {

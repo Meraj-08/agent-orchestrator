@@ -1626,10 +1626,11 @@ describe("SessionInspector Activity section", () => {
   });
 
   it("surfaces project, repository, branch, and active agent context in the summary", async () => {
-    renderWithQuery(<SessionInspector session={session([])} />);
+    renderWithQuery(<SessionInspector session={session([], { branch: "feature/session" })} />);
 
     const context = await screen.findByTestId("execution-context");
-    await waitFor(() => expect(context).toHaveTextContent("main"));
+    await waitFor(() => expect(context).toHaveTextContent("feature/session"));
+    expect(context).not.toHaveTextContent("main");
     expect(context).toHaveTextContent("my-app");
     expect(context).toHaveTextContent("/repo");
     expect(context).toHaveTextContent("Claude");

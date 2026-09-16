@@ -190,6 +190,17 @@ describe("TaskComposerView", () => {
 		expect(screen.getByRole("button", { name: "Start task" })).toBeDisabled();
 	});
 
+	it("blocks form and Enter submission while project context is unavailable", () => {
+		const props = viewProps({ canSubmit: false });
+		const { container } = render(<TaskComposerView {...props} />);
+		const prompt = screen.getByRole("textbox", { name: "Task" });
+
+		fireEvent.keyDown(prompt, { key: "Enter", shiftKey: false, altKey: false });
+		fireEvent.submit(container.querySelector("form") as HTMLFormElement);
+
+		expect(props.submission.onSubmit).not.toHaveBeenCalled();
+	});
+
 	it("forwards picked, pasted, dropped, and removed attachments", () => {
 		const onAddFiles = vi.fn();
 		const onRemove = vi.fn();

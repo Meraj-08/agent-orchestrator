@@ -60,6 +60,7 @@ import { formatTokenCount } from "../lib/format-token-count";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import { findProjectOrchestrator, sortedPRs, STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { getAgentActivityView, getSessionTimelinePillView } from "../lib/session-presentation";
+import { executionContextLabels, projectRepositories } from "../lib/execution-context";
 import { aoBridge } from "../lib/bridge";
 import { BrowserPanelView, type BrowserAnnotationQueueModel } from "./BrowserPanel";
 import type { BrowserViewModel } from "../hooks/useBrowserView";
@@ -347,18 +348,8 @@ const SummaryView = memo(function SummaryView({
 				<ExecutionContextView
 					activeAgent={agentLabel(session.provider)}
 					activeRole={session.kind === "orchestrator" ? "orchestrator" : "worker"}
-					baseBranch={project?.defaultBranch ?? session.branch}
-					labels={{
-						active: "active",
-						baseBranch: t("settings.project.defaultBranch"),
-						configured: "configured",
-						executionContext: "execution context",
-						loading: "loading project context…",
-						orchestrator: t("settings.models.orchestratorRole"),
-						path: t("settings.project.path"),
-						repository: t("settings.project.repository"),
-						worker: t("settings.models.workerRole"),
-					}}
+					baseBranch={session.branch ?? project?.defaultBranch}
+					labels={executionContextLabels(t)}
 					loading={
 						!usePreviewData &&
 						session.workspaceId !== STANDALONE_WORKSPACE_ID &&
@@ -407,11 +398,6 @@ const SummaryView = memo(function SummaryView({
 		/>
 	);
 });
-
-function projectRepositories(project: Project | undefined): string[] {
-	if (!project) return [];
-	return [...new Set([project.repo, ...(project.workspaceRepos ?? []).map((repo) => repo.repo)].filter(Boolean))];
-}
 
 const ReviewsView = memo(function ReviewsView({
 	session,

@@ -221,6 +221,7 @@ export function TaskComposerView({
 
 	const submit = (event: FormEvent<HTMLFormElement>) => {
 		event.preventDefault();
+		if (!canSubmit || submission.isSubmitting) return;
 		submission.onSubmit(promptRef.current);
 	};
 
