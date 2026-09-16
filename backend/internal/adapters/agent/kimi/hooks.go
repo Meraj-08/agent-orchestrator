@@ -230,20 +230,11 @@ func kimiSeedConfig(targetPath string, existing []byte) ([]byte, bool, error) {
 
 func kimiSourceOAuthAuthorized(sourceHome string) (bool, error) {
 	configPath := filepath.Join(sourceHome, "config.toml")
-	paths, err := kimiConfigOAuthCredentialPaths(configPath)
+	status, found, err := kimiConfigAuthStatus(configPath)
 	if err != nil {
-		return false, fmt.Errorf("read source Kimi config %s: %w", configPath, err)
+		return false, fmt.Errorf("read source Kimi auth %s: %w", configPath, err)
 	}
-	for _, path := range paths {
-		status, ok, err := kimiCredentialsAuthStatus(path)
-		if err != nil {
-			return false, fmt.Errorf("read source Kimi credentials %s: %w", path, err)
-		}
-		if ok && status == ports.AgentAuthStatusAuthorized {
-			return true, nil
-		}
-	}
-	return false, nil
+	return found && status == ports.AgentAuthStatusAuthorized, nil
 }
 
 func kimiConfigCanSeed(existing []byte) bool {
