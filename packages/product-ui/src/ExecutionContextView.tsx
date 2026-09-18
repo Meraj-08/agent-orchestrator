@@ -1,6 +1,7 @@
 export type ExecutionContextLabels = {
 	active: string;
 	baseBranch: string;
+	branch: string;
 	configured: string;
 	executionContext: string;
 	loading: string;
@@ -14,6 +15,7 @@ export type ExecutionContextViewProps = {
 	activeAgent?: string;
 	activeRole?: "worker" | "orchestrator";
 	baseBranch?: string;
+	branch?: string;
 	error?: string;
 	labels: ExecutionContextLabels;
 	loading?: boolean;
@@ -29,6 +31,7 @@ export function ExecutionContextView({
 	activeAgent,
 	activeRole,
 	baseBranch,
+	branch,
 	error,
 	labels,
 	loading = false,
@@ -40,6 +43,7 @@ export function ExecutionContextView({
 }: ExecutionContextViewProps) {
 	const facts: Array<{ label: string; value: string; emphasis?: boolean }> = [];
 	if (repositories.length > 0) facts.push({ label: labels.repository, value: repositories.join(", ") });
+	if (branch) facts.push({ label: labels.branch, value: branch });
 	if (baseBranch) facts.push({ label: labels.baseBranch, value: baseBranch });
 	if (activeAgent) {
 		facts.push({

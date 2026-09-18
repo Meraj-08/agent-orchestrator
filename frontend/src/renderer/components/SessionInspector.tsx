@@ -348,7 +348,8 @@ const SummaryView = memo(function SummaryView({
 				<ExecutionContextView
 					activeAgent={agentLabel(session.provider)}
 					activeRole={session.kind === "orchestrator" ? "orchestrator" : "worker"}
-					baseBranch={session.branch ?? project?.defaultBranch}
+					baseBranch={project?.defaultBranch}
+					branch={session.branch}
 					labels={executionContextLabels(t)}
 					loading={
 						!usePreviewData &&

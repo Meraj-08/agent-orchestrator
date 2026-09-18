@@ -184,7 +184,7 @@ describe("portable inspector presentations", () => {
     expect(Boolean(context.compareDocumentPosition(pullRequest) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
   });
 
-	it("renders PR facts and host-owned actions from a neutral view model", () => {
+  it("renders PR facts and host-owned actions from a neutral view model", () => {
     render(
       <InspectorPullRequestCardView
         countNounLabel={(count, noun) => `${count} ${noun}s`}

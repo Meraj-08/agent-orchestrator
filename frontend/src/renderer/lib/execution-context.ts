@@ -13,6 +13,7 @@ export function executionContextLabels(t: TFunction): ExecutionContextLabels {
 	return {
 		active: t("executionContext.active"),
 		baseBranch: t("settings.project.defaultBranch"),
+		branch: t("inspector.branch"),
 		configured: t("executionContext.configured"),
 		executionContext: t("executionContext.title"),
 		loading: t("executionContext.loading"),

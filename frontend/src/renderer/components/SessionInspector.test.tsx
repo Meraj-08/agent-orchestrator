@@ -1630,7 +1630,9 @@ describe("SessionInspector Activity section", () => {
 
     const context = await screen.findByTestId("execution-context");
     await waitFor(() => expect(context).toHaveTextContent("feature/session"));
-    expect(context).not.toHaveTextContent("main");
+    expect(within(context).getByText("Branch", { exact: true })).toBeInTheDocument();
+    expect(within(context).getByText("Default branch", { exact: true })).toBeInTheDocument();
+    expect(context).toHaveTextContent("main");
     expect(context).toHaveTextContent("my-app");
     expect(context).toHaveTextContent("/repo");
     expect(context).toHaveTextContent("Claude");
