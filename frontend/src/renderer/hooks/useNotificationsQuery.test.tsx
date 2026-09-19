@@ -107,7 +107,7 @@ describe("useClearNotificationMutation", () => {
 			await result.current.mutateAsync(notification);
 		});
 
-		expect(deleteNotificationMock).toHaveBeenCalledWith("ntf_1");
+		expect(deleteNotificationMock).toHaveBeenCalledWith(notification);
 		expect(applyOptimisticNotificationDeleteMock).toHaveBeenCalledWith(queryClient, notification);
 		expect(applyNotificationDeletedMock).toHaveBeenCalledWith(queryClient, notification);
 		expect(cancelSpy).toHaveBeenCalledTimes(2);

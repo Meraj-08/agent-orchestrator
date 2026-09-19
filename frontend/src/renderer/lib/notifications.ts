@@ -113,10 +113,14 @@ export async function clearAllNotifications(): Promise<ClearNotificationsResult>
 	return data;
 }
 
-export async function deleteNotification(id: string): Promise<NotificationDTO> {
-	const { data, error } = await apiClient.DELETE("/api/v1/notifications/{id}", {
-		params: { path: { id } },
+export async function deleteNotification(notification: NotificationDTO): Promise<NotificationDTO> {
+	const { data, error, response } = await apiClient.DELETE("/api/v1/notifications/{id}", {
+		params: { path: { id: notification.id } },
 	});
+	// Another window may have cleared the same row before its live event reaches
+	// this one. The requested end state already holds, so confirm the optimistic
+	// removal instead of rolling it back and showing an error.
+	if (response.status === 404) return notification;
 	if (error || !data) throw new Error(apiErrorMessage(error, "Could not clear notification"));
 	return data.notification;
 }

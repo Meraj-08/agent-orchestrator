@@ -148,12 +148,21 @@ describe("notification cache helpers", () => {
 	});
 
 	it("calls the single-notification delete endpoint", async () => {
-		apiDeleteMock.mockResolvedValue({ data: { notification: notification() } });
+		apiDeleteMock.mockResolvedValue({ data: { notification: notification() }, response: { status: 200 } });
 
-		await expect(deleteNotification("ntf_1")).resolves.toEqual(notification());
+		await expect(deleteNotification(notification())).resolves.toEqual(notification());
 		expect(apiDeleteMock).toHaveBeenCalledWith("/api/v1/notifications/{id}", {
 			params: { path: { id: "ntf_1" } },
 		});
+	});
+
+	it("treats an already-cleared notification as a successful delete", async () => {
+		apiDeleteMock.mockResolvedValue({
+			error: { code: "NOTIFICATION_NOT_FOUND", message: "Unknown notification" },
+			response: { status: 404 },
+		});
+
+		await expect(deleteNotification(notification())).resolves.toEqual(notification());
 	});
 
 	it.each([

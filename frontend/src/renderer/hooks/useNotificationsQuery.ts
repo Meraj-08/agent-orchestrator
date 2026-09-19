@@ -64,7 +64,7 @@ export function useClearAllNotificationsMutation() {
 export function useClearNotificationMutation() {
 	const queryClient = useQueryClient();
 	return useMutation({
-		mutationFn: (notification: NotificationDTO) => deleteNotification(notification.id),
+		mutationFn: (notification: NotificationDTO) => deleteNotification(notification),
 		onMutate: async (notification) => {
 			await queryClient.cancelQueries({ queryKey: ["notifications", "history"] }, { revert: false });
 			applyOptimisticNotificationDelete(queryClient, notification);
