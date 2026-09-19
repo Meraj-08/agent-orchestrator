@@ -100,7 +100,7 @@ func (q *Queries) AcceptConversationSteerDelivery(ctx context.Context, arg Accep
 
 const activateConversationBranch = `-- name: ActivateConversationBranch :execrows
 UPDATE conversations
-SET active_branch_id = ?, updated_at = ?
+SET active_branch_id = ?, skills_json = NULL, updated_at = ?
 WHERE id = ?
 `
 

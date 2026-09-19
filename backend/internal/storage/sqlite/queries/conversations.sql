@@ -333,7 +333,7 @@ LIMIT 1;
 
 -- name: ActivateConversationBranch :execrows
 UPDATE conversations
-SET active_branch_id = ?, updated_at = ?
+SET active_branch_id = ?, skills_json = NULL, updated_at = ?
 WHERE id = ?;
 
 -- The next turn's provider choices. Written only when the user picks something,

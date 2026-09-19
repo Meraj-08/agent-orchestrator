@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
@@ -125,6 +126,43 @@ func TestAnEmptyPushClearsTheStoredCatalog(t *testing.T) {
 	}
 	if len(skills) != 0 {
 		t.Fatalf("got %+v, want none", skills)
+	}
+}
+
+func TestSkillsDoNotCrossProviderOwnershipBranches(t *testing.T) {
+	conv := &skillfulConversation{
+		fakeConversation: newFakeConversation(),
+		skills:           []ports.ChatSkill{{Name: "provider-a"}},
+	}
+	h := newHarnessWithConversation(t, conv)
+	ctx := context.Background()
+
+	conv.emit(ports.ChatEvent{Kind: ports.ChatEventSkills, Skills: conv.skills})
+	awaitStoredSkills(t, h, 1)
+	record, err := h.st.ConversationForSession(ctx, testSession)
+	if err != nil {
+		t.Fatalf("ConversationForSession: %v", err)
+	}
+	branch := domain.ConversationBranch{
+		ID: "provider-b", ConversationID: record.ID, SessionID: testSession,
+		ProviderConversationID: "thread-b", ParentBranchID: record.ActiveBranchID,
+		ForkAfterSequence: record.LatestSequence, ProviderScopeID: "provider-b",
+	}
+	if err := h.st.CreateConversationBranch(ctx, branch, h.now()); err != nil {
+		t.Fatalf("CreateConversationBranch: %v", err)
+	}
+	if err := h.st.ActivateConversationBranch(ctx, testSession, record.ID, branch.ID,
+		branch.ProviderConversationID, "provider-b-generation", h.now()); err != nil {
+		t.Fatalf("ActivateConversationBranch: %v", err)
+	}
+
+	conv.skills = nil
+	skills, err := h.svc.Skills(ctx, testSession)
+	if err != nil {
+		t.Fatalf("Skills: %v", err)
+	}
+	if len(skills) != 0 {
+		t.Fatalf("got %+v from the previous provider owner, want none", skills)
 	}
 }
 
