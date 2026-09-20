@@ -706,6 +706,9 @@ func (l *agentLauncher) Notify(ctx context.Context, handleID string, spec Launch
 	if err != nil {
 		return fmt.Errorf("reviewer message: %w", err)
 	}
+	if reviewID, ok := reviewerChatID(handleID); ok && l.chat != nil {
+		return l.chat.SendReviewChat(ctx, reviewID, msg)
+	}
 	if err := l.runtime.SendMessage(ctx, ports.RuntimeHandle{ID: handleID}, msg); err != nil {
 		return fmt.Errorf("notify reviewer: %w", err)
 	}
@@ -715,6 +718,9 @@ func (l *agentLauncher) Notify(ctx context.Context, handleID string, spec Launch
 func (l *agentLauncher) Alive(ctx context.Context, handleID string) (bool, error) {
 	if handleID == "" {
 		return false, nil
+	}
+	if reviewID, ok := reviewerChatID(handleID); ok && l.chat != nil {
+		return l.chat.ReviewChatAlive(reviewID), nil
 	}
 	return l.runtime.IsAlive(ctx, ports.RuntimeHandle{ID: handleID})
 }
@@ -731,6 +737,9 @@ func (l *agentLauncher) Reusable(harness domain.ReviewerHarness) bool {
 func (l *agentLauncher) Cancel(ctx context.Context, handleID string, harness domain.ReviewerHarness) error {
 	if handleID == "" {
 		return nil
+	}
+	if reviewID, ok := reviewerChatID(handleID); ok && l.chat != nil {
+		return l.chat.InterruptReviewChat(ctx, reviewID)
 	}
 	reviewer, ok := l.reviewers.Reviewer(harness)
 	if !ok {
@@ -806,5 +815,13 @@ func (l *agentLauncher) Destroy(ctx context.Context, handleID string) error {
 	if handleID == "" {
 		return nil
 	}
+	if reviewID, ok := reviewerChatID(handleID); ok && l.chat != nil {
+		return l.chat.StopReviewChat(ctx, reviewID)
+	}
 	return l.runtime.Destroy(ctx, ports.RuntimeHandle{ID: handleID})
+}
+
+func reviewerChatID(handleID string) (string, bool) {
+	id, ok := strings.CutPrefix(handleID, reviewerChatHandlePrefix)
+	return id, ok && strings.TrimSpace(id) != ""
 }
