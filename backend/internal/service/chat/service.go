@@ -998,6 +998,7 @@ func (s *Service) Send(
 	return controller.Send(ctx, msg)
 }
 
+// SendForOwner sends a user message to an owner-specific chat controller.
 func (s *Service) SendForOwner(ctx context.Context, owner domain.ConversationOwner, msg ports.ChatUserMessage) (domain.ConversationTurn, error) {
 	controller, err := s.ControllerForOwner(owner)
 	if err != nil {
@@ -1023,6 +1024,7 @@ func (s *Service) Resolve(
 	return controller.Resolve(ctx, requestID, decision)
 }
 
+// ResolveForOwner resolves a pending approval for an owner-specific controller.
 func (s *Service) ResolveForOwner(ctx context.Context, owner domain.ConversationOwner, requestID string, decision ports.ChatDecision) error {
 	controller, err := s.ControllerForOwner(owner)
 	if err != nil {
@@ -1050,6 +1052,7 @@ func (s *Service) ResolveInput(
 	return controller.ResolveInput(ctx, requestID, response)
 }
 
+// ResolveInputForOwner answers structured input for an owner-specific controller.
 func (s *Service) ResolveInputForOwner(ctx context.Context, owner domain.ConversationOwner, requestID string, response ports.ChatInputResponse) error {
 	controller, err := s.ControllerForOwner(owner)
 	if err != nil {
@@ -1070,6 +1073,7 @@ func (s *Service) Interrupt(ctx context.Context, id domain.SessionID) error {
 	return controller.Interrupt(ctx)
 }
 
+// InterruptForOwner cancels the in-flight turn for an owner-specific controller.
 func (s *Service) InterruptForOwner(ctx context.Context, owner domain.ConversationOwner) error {
 	controller, err := s.ControllerForOwner(owner)
 	if err != nil {
@@ -1467,6 +1471,7 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 	}, nil
 }
 
+// SnapshotPageForReview returns a paginated snapshot of a reviewer-owned chat.
 func (s *Service) SnapshotPageForReview(ctx context.Context, reviewID string, beforeSequence, limit int64) (Snapshot, error) {
 	if s.pageReader == nil {
 		return s.SnapshotForReview(ctx, reviewID)

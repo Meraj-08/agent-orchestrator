@@ -911,6 +911,7 @@ func (s *Store) AppendRetryUserMessage(
 	return s.appendUserMessage(ctx, conversationID, session, "", generation, msg, turnID, retryOfTurnID, now)
 }
 
+// AppendReviewRetryUserMessage atomically persists a retry for a reviewer chat.
 func (s *Store) AppendReviewRetryUserMessage(ctx context.Context, conversationID string, session domain.SessionID, reviewID, generation string, msg domain.ConversationMessage, turnID, retryOfTurnID string, now time.Time) (bool, error) {
 	return s.appendUserMessage(ctx, conversationID, session, reviewID, generation, msg, turnID, retryOfTurnID, now)
 }

@@ -29,8 +29,10 @@ import (
 type ConversationOwnerKind string
 
 const (
+	// ConversationOwnerSession identifies a worker-session conversation.
 	ConversationOwnerSession ConversationOwnerKind = "session"
-	ConversationOwnerReview  ConversationOwnerKind = "review"
+	// ConversationOwnerReview identifies a reviewer-owned conversation.
+	ConversationOwnerReview ConversationOwnerKind = "review"
 )
 
 // ConversationOwner is the typed controller identity used by Chat lifecycle
@@ -40,10 +42,12 @@ type ConversationOwner struct {
 	ID   string                `json:"id"`
 }
 
+// SessionConversationOwner builds the owner identity for a worker session.
 func SessionConversationOwner(id SessionID) ConversationOwner {
 	return ConversationOwner{Kind: ConversationOwnerSession, ID: string(id)}
 }
 
+// ReviewConversationOwner builds the owner identity for a reviewer chat.
 func ReviewConversationOwner(id string) ConversationOwner {
 	return ConversationOwner{Kind: ConversationOwnerReview, ID: id}
 }

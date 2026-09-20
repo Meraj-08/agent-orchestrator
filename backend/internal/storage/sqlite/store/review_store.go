@@ -94,6 +94,7 @@ func (s *Store) ListReviewsBySession(ctx context.Context, id domain.SessionID) (
 	return out, nil
 }
 
+// ClaimReviewChatController records ownership of a reviewer chat controller.
 func (s *Store) ClaimReviewChatController(ctx context.Context, id, providerID, generation string, now time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -101,6 +102,7 @@ func (s *Store) ClaimReviewChatController(ctx context.Context, id, providerID, g
 	return n > 0, err
 }
 
+// RecordReviewChatControllerError records the most recent controller failure.
 func (s *Store) RecordReviewChatControllerError(ctx context.Context, id, message string, now time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -108,6 +110,7 @@ func (s *Store) RecordReviewChatControllerError(ctx context.Context, id, message
 	return n > 0, err
 }
 
+// ListRecoverableChatReviews returns durable reviewer chats eligible for recovery.
 func (s *Store) ListRecoverableChatReviews(ctx context.Context) ([]domain.Review, error) {
 	rows, err := s.qr.ListRecoverableChatReviews(ctx)
 	if err != nil {

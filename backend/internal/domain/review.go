@@ -43,10 +43,13 @@ type Review struct {
 	UpdatedAt              time.Time             `json:"updatedAt"`
 }
 
+// ReviewerInterfaceMode selects the durable UI surface for a reviewer.
 type ReviewerInterfaceMode string
 
 const (
-	ReviewerInterfaceTUI  ReviewerInterfaceMode = "tui"
+	// ReviewerInterfaceTUI uses the reviewer's terminal handle.
+	ReviewerInterfaceTUI ReviewerInterfaceMode = "tui"
+	// ReviewerInterfaceChat uses a reviewer-owned native chat.
 	ReviewerInterfaceChat ReviewerInterfaceMode = "chat"
 )
 
