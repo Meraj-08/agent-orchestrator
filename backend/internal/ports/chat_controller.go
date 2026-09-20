@@ -19,7 +19,10 @@ const (
 
 // ChatControllerStart is the resolved launch contract shared by the coordinator and Chat service.
 type ChatControllerStart struct {
-	SessionID             domain.SessionID
+	SessionID domain.SessionID
+	// Owner distinguishes worker and review conversations that share a worker
+	// session. Empty preserves the existing worker-session owner.
+	Owner                 domain.ConversationOwner
 	ProjectID             domain.ProjectID
 	Kind                  domain.SessionKind
 	Harness               domain.AgentHarness

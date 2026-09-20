@@ -48,13 +48,14 @@ type Service struct {
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
 	stopProviderHost       func(context.Context, domain.SessionID) error
 
-	mu           sync.RWMutex
-	controllers  map[domain.SessionID]*Controller
-	startConfigs map[domain.SessionID]StartConfig
-	gateMu       sync.Mutex
-	gates        map[domain.SessionID]controllerGate
-	probeMu      sync.Mutex
-	probed       map[domain.AgentHarness]ports.ChatCapabilities
+	mu               sync.RWMutex
+	controllers      map[domain.SessionID]*Controller
+	ownerControllers map[domain.ConversationOwner]*Controller
+	startConfigs     map[domain.SessionID]StartConfig
+	gateMu           sync.Mutex
+	gates            map[domain.SessionID]controllerGate
+	probeMu          sync.Mutex
+	probed           map[domain.AgentHarness]ports.ChatCapabilities
 }
 
 // controllerGate serializes start/stop for one session without making provider
@@ -131,6 +132,7 @@ func New(opts Options) *Service {
 		onCodexCapacityChanged: opts.OnCodexCapacityChanged,
 		stopProviderHost:       opts.StopProviderHost,
 		controllers:            make(map[domain.SessionID]*Controller),
+		ownerControllers:       make(map[domain.ConversationOwner]*Controller),
 		startConfigs:           make(map[domain.SessionID]StartConfig),
 		gates:                  make(map[domain.SessionID]controllerGate),
 		probed:                 make(map[domain.AgentHarness]ports.ChatCapabilities),
@@ -146,6 +148,13 @@ func (s *Service) controllerGate(id domain.SessionID) controllerGate {
 		s.gates[id] = gate
 	}
 	return gate
+}
+
+func conversationOwner(cfg StartConfig) domain.ConversationOwner {
+	if cfg.Owner.Kind != "" && cfg.Owner.ID != "" {
+		return cfg.Owner
+	}
+	return domain.SessionConversationOwner(cfg.SessionID)
 }
 
 // StartConfig opens a controller for a session.
@@ -325,8 +334,9 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		}
 	}
 
+	owner := conversationOwner(cfg)
 	s.mu.RLock()
-	existing := s.controllers[cfg.SessionID]
+	existing := s.ownerControllers[owner]
 	s.mu.RUnlock()
 	if existing != nil {
 		if existing.State() != ports.ChatControllerStopped {
@@ -342,8 +352,11 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			return nil, ctx.Err()
 		}
 		s.mu.Lock()
-		if current := s.controllers[cfg.SessionID]; current == existing {
-			delete(s.controllers, cfg.SessionID)
+		if current := s.ownerControllers[owner]; current == existing {
+			delete(s.ownerControllers, owner)
+			if owner.Kind == domain.ConversationOwnerSession {
+				delete(s.controllers, cfg.SessionID)
+			}
 		}
 		s.mu.Unlock()
 	}
@@ -834,7 +847,10 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		cfg.ExpectedControllerOwner.ControllerGeneration = controller.Generation()
 	}
 	s.mu.Lock()
-	s.controllers[cfg.SessionID] = controller
+	s.ownerControllers[owner] = controller
+	if owner.Kind == domain.ConversationOwnerSession {
+		s.controllers[cfg.SessionID] = controller
+	}
 	// A committed reservation is consumed. Internal controller restarts must
 	// resume the now-current branch, not retry its old ownership snapshot.
 	cfg.ProviderHandoff = nil
@@ -850,8 +866,11 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		controller.Wait()
 		controller.waitForBranchHandoff()
 		s.mu.Lock()
-		if current, ok := s.controllers[cfg.SessionID]; ok && current == controller {
-			delete(s.controllers, cfg.SessionID)
+		if current, ok := s.ownerControllers[owner]; ok && current == controller {
+			delete(s.ownerControllers, owner)
+			if owner.Kind == domain.ConversationOwnerSession {
+				delete(s.controllers, cfg.SessionID)
+			}
 		}
 		s.mu.Unlock()
 	}()
