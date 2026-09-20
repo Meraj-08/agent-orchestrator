@@ -439,7 +439,12 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	}
 	conversationID := s.newID()
 	var conversation domain.ConversationRecord
-	if cfg.ProviderHandoff != nil {
+	if owner.Kind == domain.ConversationOwnerReview {
+		if cfg.ProviderHandoff != nil || owner.ID == "" {
+			return nil, errors.New("reviewer chat does not support provider handoff")
+		}
+		conversation, err = s.store.CreateReviewConversation(ctx, conversationID, owner.ID, cfg.ProjectID, cfg.SessionID, now)
+	} else if cfg.ProviderHandoff != nil {
 		// Read the observed owner without rebinding it. Provider I/O can fail;
 		// ownership changes only with the prepared history's lifecycle commit.
 		handoff := cfg.ProviderHandoff
@@ -470,7 +475,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	}
 	var repairedBranch domain.ConversationBranch
 	var restoredProviderOwner bool
-	if cfg.ProviderHandoff == nil {
+	if cfg.ProviderHandoff == nil && owner.Kind != domain.ConversationOwnerReview {
 		repairedBranch, restoredProviderOwner, err = s.store.RepairIncompleteConversationEdit(
 			ctx, cfg.SessionID, conversation.ID, s.now())
 		if err != nil {
@@ -657,7 +662,16 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		generation = s.newID()
 	}
 	if providerBoundaryID == "" {
-		if err := s.store.ClaimChatControllerGeneration(ctx, cfg.SessionID, generation); err != nil {
+		if owner.Kind == domain.ConversationOwnerReview {
+			claimed, claimErr := s.store.ClaimReviewChatController(ctx, owner.ID, conv.ProviderConversationID(), generation, s.now())
+			if claimErr != nil || !claimed {
+				_ = cleanupUnpublishedConversation(conv, cfg.ProviderConversationID == "")
+				if claimErr != nil {
+					return nil, fmt.Errorf("claim reviewer chat controller: %w", claimErr)
+				}
+				return nil, errors.New("reviewer chat controller ownership changed")
+			}
+		} else if err := s.store.ClaimChatControllerGeneration(ctx, cfg.SessionID, generation); err != nil {
 			_ = cleanupUnpublishedConversation(conv, cfg.ProviderConversationID == "")
 			return nil, fmt.Errorf("claim chat controller: %w", err)
 		}
@@ -681,13 +695,13 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	// behind a controller that no longer existed. Nothing would ever have corrected
 	// it. Settling here covers every way a controller can come up, and is a no-op
 	// for a session that has none of it.
-	if !liveReconnect && cfg.ProviderHandoff == nil {
+	if !liveReconnect && cfg.ProviderHandoff == nil && owner.Kind != domain.ConversationOwnerReview {
 		s.settleOrphanedWork(ctx, cfg.SessionID, conversation.ID)
 	}
 	// A fresh generation per launch, so events from the controller this one
 	// replaced can be told apart from the current one's.
 	controller := newController(
-		cfg.SessionID, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
+		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
 	var commitProviderHistory func(context.Context) error
 	if liveReconnect {
 		providerTurnID := controller.restoreLiveTurnOwnership(liveRows.Turns)
