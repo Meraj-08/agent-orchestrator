@@ -1043,6 +1043,60 @@ func (q *Queries) InsertConversationTurn(ctx context.Context, arg InsertConversa
 	return err
 }
 
+const insertReviewConversation = `-- name: InsertReviewConversation :exec
+INSERT INTO conversations (id, scope, project_id, review_id, current_review_id, latest_sequence, active_branch_id, created_at, updated_at)
+VALUES (?, 'review', ?, ?, ?, 0, ?, ?, ?)
+`
+
+type InsertReviewConversationParams struct {
+	ID              string
+	ProjectID       *domain.ProjectID
+	ReviewID        sql.NullString
+	CurrentReviewID sql.NullString
+	ActiveBranchID  string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+func (q *Queries) InsertReviewConversation(ctx context.Context, arg InsertReviewConversationParams) error {
+	_, err := q.db.ExecContext(ctx, insertReviewConversation,
+		arg.ID,
+		arg.ProjectID,
+		arg.ReviewID,
+		arg.CurrentReviewID,
+		arg.ActiveBranchID,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	return err
+}
+
+const insertReviewConversationBranch = `-- name: InsertReviewConversationBranch :exec
+INSERT INTO conversation_branches (id, conversation_id, session_id, review_id, provider_conversation_id, parent_branch_id, fork_after_turn_id, replaced_turn_id, replacement_turn_id, fork_after_sequence, strategy, replay_cutoff_sequence, replay_truncated, provider_scope_id, provider_ids_scoped, created_at)
+VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, 0, 'native', 0, 0, '', 0, ?)
+`
+
+type InsertReviewConversationBranchParams struct {
+	ID                     string
+	ConversationID         string
+	SessionID              sql.NullString
+	ReviewID               sql.NullString
+	ProviderConversationID string
+	CreatedAt              time.Time
+}
+
+func (q *Queries) InsertReviewConversationBranch(ctx context.Context, arg InsertReviewConversationBranchParams) error {
+	_, err := q.db.ExecContext(ctx, insertReviewConversationBranch,
+		arg.ID,
+		arg.ConversationID,
+		arg.SessionID,
+		arg.ReviewID,
+		arg.ProviderConversationID,
+		arg.CreatedAt,
+	)
+	return err
+}
+
 const interruptRolledBackQueuedTurns = `-- name: InterruptRolledBackQueuedTurns :exec
 UPDATE conversation_turns
 SET state = 'interrupted', completed_at = ?
@@ -1883,6 +1937,53 @@ SELECT id, scope, project_id, session_id, review_id, current_session_id, current
 
 func (q *Queries) SelectConversationByID(ctx context.Context, id string) (Conversation, error) {
 	row := q.db.QueryRowContext(ctx, selectConversationByID, id)
+	var i Conversation
+	err := row.Scan(
+		&i.ID,
+		&i.Scope,
+		&i.ProjectID,
+		&i.SessionID,
+		&i.ReviewID,
+		&i.CurrentSessionID,
+		&i.CurrentReviewID,
+		&i.LatestSequence,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Model,
+		&i.ReasoningEffort,
+		&i.ApprovalMode,
+		&i.CompactedAt,
+		&i.ContextUsed,
+		&i.ContextWindow,
+		&i.UsageInputTokens,
+		&i.UsageOutputTokens,
+		&i.UsageCachedTokens,
+		&i.UsageTotalTokens,
+		&i.RateLimitPrimaryPercent,
+		&i.RateLimitSecondaryPercent,
+		&i.RateLimitPrimaryResetsIn,
+		&i.RateLimitSecondaryResetsIn,
+		&i.RateLimitPlan,
+		&i.ProviderTitle,
+		&i.AppliedTitle,
+		&i.ModelRerouteJson,
+		&i.AccountJson,
+		&i.ThreadStateJson,
+		&i.McpServersJson,
+		&i.UsageCost,
+		&i.UsageCurrency,
+		&i.ActiveBranchID,
+		&i.OpencodeMode,
+	)
+	return i, err
+}
+
+const selectConversationByReview = `-- name: SelectConversationByReview :one
+SELECT id, scope, project_id, session_id, review_id, current_session_id, current_review_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode FROM conversations WHERE current_review_id = ? LIMIT 1
+`
+
+func (q *Queries) SelectConversationByReview(ctx context.Context, currentReviewID sql.NullString) (Conversation, error) {
+	row := q.db.QueryRowContext(ctx, selectConversationByReview, currentReviewID)
 	var i Conversation
 	err := row.Scan(
 		&i.ID,

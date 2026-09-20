@@ -12,6 +12,13 @@ INSERT INTO conversations (
 )
 VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?);
 
+-- name: InsertReviewConversation :exec
+INSERT INTO conversations (id, scope, project_id, review_id, current_review_id, latest_sequence, active_branch_id, created_at, updated_at)
+VALUES (?, 'review', ?, ?, ?, 0, ?, ?, ?);
+
+-- name: SelectConversationByReview :one
+SELECT * FROM conversations WHERE current_review_id = ? LIMIT 1;
+
 -- name: SelectConversationBySession :one
 SELECT * FROM conversations WHERE current_session_id = ? LIMIT 1;
 
@@ -54,6 +61,10 @@ INSERT INTO conversation_branches (
     sqlc.narg(replacement_turn_id), sqlc.arg(fork_after_sequence), sqlc.arg(strategy),
     sqlc.arg(replay_cutoff_sequence), sqlc.arg(replay_truncated), sqlc.arg(provider_scope_id), sqlc.arg(provider_ids_scoped), sqlc.arg(created_at)
 );
+
+-- name: InsertReviewConversationBranch :exec
+INSERT INTO conversation_branches (id, conversation_id, session_id, review_id, provider_conversation_id, parent_branch_id, fork_after_turn_id, replaced_turn_id, replacement_turn_id, fork_after_sequence, strategy, replay_cutoff_sequence, replay_truncated, provider_scope_id, provider_ids_scoped, created_at)
+VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, 0, 'native', 0, 0, '', 0, ?);
 
 -- name: SelectConversationBranch :one
 WITH RECURSIVE lineage(id, parent_branch_id, replaced_turn_id, provider_scope_id, depth) AS (
