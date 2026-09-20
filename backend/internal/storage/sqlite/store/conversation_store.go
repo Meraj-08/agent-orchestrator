@@ -811,6 +811,19 @@ func (s *Store) ConversationForSession(
 	return conversationToDomain(row), nil
 }
 
+// ConversationForReview looks up the durable conversation owned by a reviewer
+// row rather than by its parent worker session.
+func (s *Store) ConversationForReview(ctx context.Context, reviewID string) (domain.ConversationRecord, error) {
+	row, err := s.qr.SelectConversationByReview(ctx, nullableString(reviewID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.ConversationRecord{}, ErrConversationNotFound
+	}
+	if err != nil {
+		return domain.ConversationRecord{}, fmt.Errorf("select conversation for review %s: %w", reviewID, err)
+	}
+	return conversationToDomain(row), nil
+}
+
 // HasConversationTurns includes hidden and settled turns: an empty visible
 // timeline is not proof that the provider conversation never started.
 func (s *Store) HasConversationTurns(ctx context.Context, conversationID string) (bool, error) {

@@ -160,6 +160,11 @@ func conversationOwner(cfg StartConfig) domain.ConversationOwner {
 // StartConfig opens a controller for a session.
 type StartConfig = ports.ChatControllerStart
 
+type reviewerConversationStore interface {
+	ConversationForReview(context.Context, string) (domain.ConversationRecord, error)
+	GetReviewByID(context.Context, string) (domain.Review, bool, error)
+}
+
 // ControllerCommit is the conversation state committed by ControllerReady.
 // Carrying it back across the callback avoids a fallible database read after an
 // irreversible ownership transfer.
@@ -908,6 +913,17 @@ func (s *Service) Controller(sessionID domain.SessionID) (*Controller, error) {
 	return controller, nil
 }
 
+// ControllerForOwner returns a live controller using the typed durable owner.
+func (s *Service) ControllerForOwner(owner domain.ConversationOwner) (*Controller, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	controller, ok := s.ownerControllers[owner]
+	if !ok {
+		return nil, ErrNoController
+	}
+	return controller, nil
+}
+
 // HasLiveChatController reports whether the service owns a controller that can
 // still process provider events. A stopped controller can remain in the registry
 // briefly while its final cleanup lands; Start waits for that cleanup before
@@ -962,6 +978,14 @@ func (s *Service) Send(
 	return controller.Send(ctx, msg)
 }
 
+func (s *Service) SendForOwner(ctx context.Context, owner domain.ConversationOwner, msg ports.ChatUserMessage) (domain.ConversationTurn, error) {
+	controller, err := s.ControllerForOwner(owner)
+	if err != nil {
+		return domain.ConversationTurn{}, err
+	}
+	return controller.Send(ctx, msg)
+}
+
 // Resolve answers a pending approval.
 func (s *Service) Resolve(
 	ctx context.Context,
@@ -973,6 +997,14 @@ func (s *Service) Resolve(
 		return err
 	}
 	controller, err := s.Controller(id)
+	if err != nil {
+		return err
+	}
+	return controller.Resolve(ctx, requestID, decision)
+}
+
+func (s *Service) ResolveForOwner(ctx context.Context, owner domain.ConversationOwner, requestID string, decision ports.ChatDecision) error {
+	controller, err := s.ControllerForOwner(owner)
 	if err != nil {
 		return err
 	}
@@ -998,12 +1030,28 @@ func (s *Service) ResolveInput(
 	return controller.ResolveInput(ctx, requestID, response)
 }
 
+func (s *Service) ResolveInputForOwner(ctx context.Context, owner domain.ConversationOwner, requestID string, response ports.ChatInputResponse) error {
+	controller, err := s.ControllerForOwner(owner)
+	if err != nil {
+		return err
+	}
+	return controller.ResolveInput(ctx, requestID, response)
+}
+
 // Interrupt cancels a session's in-flight turn.
 func (s *Service) Interrupt(ctx context.Context, id domain.SessionID) error {
 	if _, err := s.requireChatSession(ctx, id); err != nil {
 		return err
 	}
 	controller, err := s.Controller(id)
+	if err != nil {
+		return err
+	}
+	return controller.Interrupt(ctx)
+}
+
+func (s *Service) InterruptForOwner(ctx context.Context, owner domain.ConversationOwner) error {
+	controller, err := s.ControllerForOwner(owner)
 	if err != nil {
 		return err
 	}
@@ -1280,6 +1328,46 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 	}, nil
 }
 
+// SnapshotForReview reads a reviewer-owned chat narrative without treating the
+// reviewer row as an AO session.
+func (s *Service) SnapshotForReview(ctx context.Context, reviewID string) (Snapshot, error) {
+	store, ok := s.store.(reviewerConversationStore)
+	if !ok {
+		return Snapshot{}, errors.New("reviewer conversation store is unavailable")
+	}
+	review, found, err := store.GetReviewByID(ctx, reviewID)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if !found {
+		return Snapshot{}, ports.ErrSessionNotFound
+	}
+	if review.InterfaceMode != domain.ReviewerInterfaceChat {
+		return Snapshot{}, ErrNotChatMode
+	}
+	conversation, err := store.ConversationForReview(ctx, reviewID)
+	if errors.Is(err, domain.ErrNoConversation) {
+		return Snapshot{SessionID: review.SessionID, Harness: domain.AgentHarness(review.Harness), Mode: domain.SessionModeChat, Controller: ports.ChatControllerStopped}, nil
+	}
+	if err != nil {
+		return Snapshot{}, err
+	}
+	rows, err := s.reader.LoadConversationSnapshot(ctx, conversation.ID)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	return s.snapshotForReviewRows(review, rows), nil
+}
+
+func (s *Service) snapshotForReviewRows(review domain.Review, rows ConversationRows) Snapshot {
+	state := ports.ChatControllerStopped
+	var caps ports.ChatCapabilities
+	if controller, err := s.ControllerForOwner(domain.ReviewConversationOwner(review.ID)); err == nil {
+		state, caps = controller.State(), controller.Capabilities()
+	}
+	return Snapshot{Conversation: rows.Conversation, ActiveBranch: rows.ActiveBranch, EditFloorSequence: rows.EditFloorSequence, NativeForkAvailableAfterSequence: rows.NativeForkAvailableAfterSequence, SessionID: review.SessionID, Harness: domain.AgentHarness(review.Harness), Mode: domain.SessionModeChat, Controller: state, Turns: rows.Turns, Messages: rows.Messages, Activities: rows.Activities, BranchPoints: rows.BranchPoints, BranchedFromEarlierMessage: rows.BranchedFromEarlierMessage, OldestSequence: rows.OldestSequence, HasMoreBefore: rows.HasMoreBefore, Capabilities: caps, Usage: rows.Conversation.Usage, RateLimits: rows.Conversation.RateLimits}
+}
+
 // SnapshotPage reads one bounded timeline page. The live conversation metadata
 // remains current on every page; only turns/messages/activities are windowed.
 func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeSequence, limit int64) (Snapshot, error) {
@@ -1334,6 +1422,38 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 		Usage:                            rows.Conversation.Usage,
 		RateLimits:                       rows.Conversation.RateLimits,
 	}, nil
+}
+
+func (s *Service) SnapshotPageForReview(ctx context.Context, reviewID string, beforeSequence, limit int64) (Snapshot, error) {
+	if s.pageReader == nil {
+		return s.SnapshotForReview(ctx, reviewID)
+	}
+	store, ok := s.store.(reviewerConversationStore)
+	if !ok {
+		return Snapshot{}, errors.New("reviewer conversation store is unavailable")
+	}
+	review, found, err := store.GetReviewByID(ctx, reviewID)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if !found {
+		return Snapshot{}, ports.ErrSessionNotFound
+	}
+	if review.InterfaceMode != domain.ReviewerInterfaceChat {
+		return Snapshot{}, ErrNotChatMode
+	}
+	conversation, err := store.ConversationForReview(ctx, reviewID)
+	if errors.Is(err, domain.ErrNoConversation) {
+		return s.SnapshotForReview(ctx, reviewID)
+	}
+	if err != nil {
+		return Snapshot{}, err
+	}
+	rows, err := s.pageReader.LoadConversationSnapshotPage(ctx, conversation.ID, beforeSequence, limit)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	return s.snapshotForReviewRows(review, rows), nil
 }
 
 // SnapshotReaderFunc adapts a plain function to SnapshotReader. The daemon wiring
