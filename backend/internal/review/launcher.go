@@ -62,22 +62,25 @@ type Launcher interface {
 
 // LaunchSpec is the engine's request to (re)launch a reviewer for one pass.
 type LaunchSpec struct {
-	RunID                string
-	BatchID              string
-	ReviewSessionID      string
-	LaunchID             string
-	WorkerID             domain.SessionID
-	ProjectID            domain.ProjectID
-	Harness              domain.ReviewerHarness
-	AgentConfig          domain.AgentConfig
-	WorkspacePath        string
-	AgentSessionID       string
-	RequireNativeHistory bool
-	PreviousRuns         []domain.ReviewRun
-	PRURL                string
-	TargetSHA            string
-	ReviewQueue          []ports.ReviewTask
-	ReviewIndex          int
+	RunID           string
+	BatchID         string
+	ReviewSessionID string
+	LaunchID        string
+	WorkerID        domain.SessionID
+	ProjectID       domain.ProjectID
+	Harness         domain.ReviewerHarness
+	AgentConfig     domain.AgentConfig
+	WorkspacePath   string
+	AgentSessionID  string
+	// ProviderConversationID is the typed Chat driver's stable conversation id.
+	// Terminal reviewers continue to use AgentSessionID.
+	ProviderConversationID string
+	RequireNativeHistory   bool
+	PreviousRuns           []domain.ReviewRun
+	PRURL                  string
+	TargetSHA              string
+	ReviewQueue            []ports.ReviewTask
+	ReviewIndex            int
 }
 
 // LaunchResult is the terminal/runtime state created by a reviewer launch.
@@ -88,6 +91,33 @@ type LaunchResult struct {
 	// NativeResumed reports whether the launch resumed the provider-native
 	// conversation instead of falling back to a fresh reviewer process.
 	NativeResumed bool
+}
+
+// ReviewerChatStart is the transport-neutral typed reviewer launch request.
+type ReviewerChatStart struct {
+	ReviewID               string
+	WorkerID               domain.SessionID
+	ProjectID              domain.ProjectID
+	Harness                domain.AgentHarness
+	DataDir                string
+	WorkspacePath          string
+	Env                    map[string]string
+	Prompt                 string
+	SystemPrompt           string
+	ProviderConversationID string
+}
+
+// ReviewerChatController is the narrow bridge from the review engine to the
+// typed Chat service. It deliberately excludes HTTP and renderer concerns.
+type ReviewerChatController interface {
+	SupportsReviewChat(domain.AgentHarness) bool
+	PreflightReviewChat(context.Context, domain.AgentHarness) error
+	StartReviewChat(context.Context, ReviewerChatStart) (string, error)
+	RestoreReviewChat(context.Context, ReviewerChatStart) (string, error)
+	SendReviewChat(context.Context, string, string) error
+	ReviewChatAlive(string) bool
+	InterruptReviewChat(context.Context, string) error
+	StopReviewChat(context.Context, string) error
 }
 
 // reviewerRuntime is the runtime surface the launcher needs: create a pane,
@@ -113,6 +143,7 @@ type agentLauncher struct {
 	runFile    string
 	auth       agentAuthResolver
 	executable func() (string, error)
+	chat       ReviewerChatController
 }
 
 type preLaunchReviewer interface {
@@ -129,6 +160,12 @@ type agentAuthResolver interface {
 
 // LauncherOption configures reviewer launcher behavior.
 type LauncherOption func(*agentLauncher)
+
+// WithReviewerChat enables typed reviewer conversations for supporting
+// adapters. A nil controller intentionally keeps every reviewer on TUI.
+func WithReviewerChat(chat ReviewerChatController) LauncherOption {
+	return func(l *agentLauncher) { l.chat = chat }
+}
 
 // WithAgentAuth lets reviewer preflight reuse the agent auth catalog for the
 // same harness. Reviewer-specific auth probes must not be stricter than the
@@ -176,6 +213,9 @@ func (l *agentLauncher) Preflight(ctx context.Context, harness domain.ReviewerHa
 	if !ok {
 		return fmt.Errorf("no reviewer adapter for harness %q", harness)
 	}
+	if profile, ok := reviewer.(ports.ReviewerChatProfile); ok && l.reviewChatSupported(profile) {
+		return l.chat.PreflightReviewChat(ctx, profile.ReviewChatHarness())
+	}
 	cmd, err := reviewer.ReviewCommand(ctx, ports.ReviewInvocation{WorkspacePath: workspacePath})
 	if err != nil {
 		return fmt.Errorf("reviewer command: %w", err)
@@ -214,6 +254,10 @@ func (l *agentLauncher) Preflight(ctx context.Context, harness domain.ReviewerHa
 		}
 	}
 	return nil
+}
+
+func (l *agentLauncher) reviewChatSupported(profile ports.ReviewerChatProfile) bool {
+	return l.chat != nil && l.chat.SupportsReviewChat(profile.ReviewChatHarness())
 }
 
 func (l *agentLauncher) agentAuthStatus(ctx context.Context, harness domain.ReviewerHarness) (ports.AgentAuthStatus, bool, error) {
