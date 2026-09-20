@@ -88,6 +88,55 @@ BEGIN
       AND id IN (SELECT active_branch_id FROM conversations WHERE current_review_id = NEW.id);
 END;
 
+CREATE TRIGGER conversation_turns_branch_insert AFTER INSERT ON conversation_turns
+WHEN NEW.branch_id = '' BEGIN
+  UPDATE conversation_turns SET branch_id = (SELECT active_branch_id FROM conversations WHERE id = NEW.conversation_id) WHERE id = NEW.id;
+END;
+CREATE TRIGGER conversation_messages_branch_insert AFTER INSERT ON conversation_messages
+WHEN NEW.branch_id = '' BEGIN
+  UPDATE conversation_messages SET branch_id = (SELECT active_branch_id FROM conversations WHERE id = NEW.conversation_id) WHERE id = NEW.id;
+END;
+CREATE TRIGGER conversation_activities_branch_insert AFTER INSERT ON conversation_activities
+WHEN NEW.branch_id = '' BEGIN
+  UPDATE conversation_activities SET branch_id = (SELECT active_branch_id FROM conversations WHERE id = NEW.conversation_id) WHERE id = NEW.id;
+END;
+CREATE TRIGGER conversation_provider_events_branch_insert AFTER INSERT ON conversation_provider_events
+WHEN NEW.branch_id = '' BEGIN
+  UPDATE conversation_provider_events SET branch_id = (SELECT active_branch_id FROM conversations WHERE id = NEW.conversation_id) WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER review_conversation_title_cdc_update AFTER UPDATE OF provider_title ON conversations
+WHEN OLD.provider_title <> NEW.provider_title AND NEW.current_review_id IS NOT NULL BEGIN
+  INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
+  SELECT s.project_id, s.id, 'session_updated', json_object('id', s.id, 'sessionId', s.id, 'reviewId', r.id, 'conversationId', NEW.id, 'activity', s.activity_state, 'isTerminated', json(CASE WHEN s.is_terminated THEN 'true' ELSE 'false' END)), NEW.updated_at
+  FROM review r JOIN sessions s ON s.id = r.session_id WHERE r.id = NEW.current_review_id;
+END;
+
+CREATE TRIGGER conversation_messages_cdc_insert AFTER INSERT ON conversation_messages BEGIN
+  INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
+  SELECT s.project_id, s.id, 'session_updated', json_object('id',s.id,'sessionId',s.id,'conversationId',c.id,'activity',s.activity_state,'isTerminated',json(CASE WHEN s.is_terminated THEN 'true' ELSE 'false' END)), NEW.updated_at FROM conversations c JOIN sessions s ON s.id=c.current_session_id WHERE c.id=NEW.conversation_id
+  UNION ALL SELECT s.project_id,s.id,'session_updated',json_object('id',s.id,'sessionId',s.id,'reviewId',r.id,'conversationId',c.id,'activity',s.activity_state,'isTerminated',json(CASE WHEN s.is_terminated THEN 'true' ELSE 'false' END)),NEW.updated_at FROM conversations c JOIN review r ON r.id=c.current_review_id JOIN sessions s ON s.id=r.session_id WHERE c.id=NEW.conversation_id;
+END;
+CREATE TRIGGER conversation_messages_cdc_update AFTER UPDATE ON conversation_messages WHEN OLD.revision <> NEW.revision BEGIN
+  INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
+  SELECT s.project_id,s.id,'session_updated',json_object('id',s.id,'sessionId',s.id,'conversationId',c.id,'activity',s.activity_state,'isTerminated',json(CASE WHEN s.is_terminated THEN 'true' ELSE 'false' END)),NEW.updated_at FROM conversations c JOIN sessions s ON s.id=c.current_session_id WHERE c.id=NEW.conversation_id
+  UNION ALL SELECT s.project_id,s.id,'session_updated',json_object('id',s.id,'sessionId',s.id,'reviewId',r.id,'conversationId',c.id,'activity',s.activity_state,'isTerminated',json(CASE WHEN s.is_terminated THEN 'true' ELSE 'false' END)),NEW.updated_at FROM conversations c JOIN review r ON r.id=c.current_review_id JOIN sessions s ON s.id=r.session_id WHERE c.id=NEW.conversation_id;
+END;
+CREATE TRIGGER conversation_activities_cdc_insert AFTER INSERT ON conversation_activities BEGIN
+  INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
+  SELECT s.project_id,s.id,'session_updated',json_object('id',s.id,'sessionId',s.id,'conversationId',c.id,'activity',s.activity_state,'isTerminated',json(CASE WHEN s.is_terminated THEN 'true' ELSE 'false' END)),NEW.updated_at FROM conversations c JOIN sessions s ON s.id=c.current_session_id WHERE c.id=NEW.conversation_id
+  UNION ALL SELECT s.project_id,s.id,'session_updated',json_object('id',s.id,'sessionId',s.id,'reviewId',r.id,'conversationId',c.id,'activity',s.activity_state,'isTerminated',json(CASE WHEN s.is_terminated THEN 'true' ELSE 'false' END)),NEW.updated_at FROM conversations c JOIN review r ON r.id=c.current_review_id JOIN sessions s ON s.id=r.session_id WHERE c.id=NEW.conversation_id;
+END;
+CREATE TRIGGER conversation_activities_cdc_update AFTER UPDATE ON conversation_activities WHEN OLD.revision <> NEW.revision BEGIN
+  INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
+  SELECT s.project_id,s.id,'session_updated',json_object('id',s.id,'sessionId',s.id,'conversationId',c.id,'activity',s.activity_state,'isTerminated',json(CASE WHEN s.is_terminated THEN 'true' ELSE 'false' END)),NEW.updated_at FROM conversations c JOIN sessions s ON s.id=c.current_session_id WHERE c.id=NEW.conversation_id
+  UNION ALL SELECT s.project_id,s.id,'session_updated',json_object('id',s.id,'sessionId',s.id,'reviewId',r.id,'conversationId',c.id,'activity',s.activity_state,'isTerminated',json(CASE WHEN s.is_terminated THEN 'true' ELSE 'false' END)),NEW.updated_at FROM conversations c JOIN review r ON r.id=c.current_review_id JOIN sessions s ON s.id=r.session_id WHERE c.id=NEW.conversation_id;
+END;
+CREATE TRIGGER conversation_turns_cdc_update AFTER UPDATE ON conversation_turns WHEN OLD.state <> NEW.state BEGIN
+  INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
+  SELECT s.project_id,s.id,'session_updated',json_object('id',s.id,'sessionId',s.id,'reviewId',NEW.handled_by_review_id,'conversationId',NEW.conversation_id,'activity',s.activity_state,'isTerminated',json(CASE WHEN s.is_terminated THEN 'true' ELSE 'false' END)),COALESCE(NEW.completed_at,NEW.started_at,NEW.requested_at) FROM sessions s WHERE s.id=NEW.handled_by_session_id;
+END;
+
 PRAGMA foreign_keys=ON;
 PRAGMA foreign_key_check;
 -- +goose StatementEnd
