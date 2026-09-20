@@ -104,6 +104,14 @@ CREATE TRIGGER conversation_provider_events_branch_insert AFTER INSERT ON conver
 WHEN NEW.branch_id = '' BEGIN
   UPDATE conversation_provider_events SET branch_id = (SELECT active_branch_id FROM conversations WHERE id = NEW.conversation_id) WHERE id = NEW.id;
 END;
+CREATE TRIGGER conversation_branch_root_provider_update
+AFTER UPDATE OF provider_conversation_id ON sessions
+WHEN OLD.provider_conversation_id = '' AND NEW.provider_conversation_id <> ''
+BEGIN
+  UPDATE conversation_branches SET provider_conversation_id = NEW.provider_conversation_id
+  WHERE parent_branch_id IS NULL AND provider_conversation_id = ''
+    AND id IN (SELECT active_branch_id FROM conversations WHERE current_session_id = NEW.id);
+END;
 
 CREATE TRIGGER review_conversation_title_cdc_update AFTER UPDATE OF provider_title ON conversations
 WHEN OLD.provider_title <> NEW.provider_title AND NEW.current_review_id IS NOT NULL BEGIN
