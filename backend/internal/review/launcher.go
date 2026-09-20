@@ -120,6 +120,8 @@ type ReviewerChatController interface {
 	StopReviewChat(context.Context, string) error
 }
 
+const reviewerChatHandlePrefix = "review-chat:"
+
 // reviewerRuntime is the runtime surface the launcher needs: create a pane,
 // inject a message into a running pane, and probe liveness. The tmux runtime
 // satisfies it.
@@ -429,6 +431,11 @@ func (l *agentLauncher) Spawn(ctx context.Context, spec LaunchSpec) (LaunchResul
 	if err != nil {
 		return LaunchResult{}, err
 	}
+	if reviewer, ok := l.reviewers.Reviewer(spec.Harness); ok {
+		if profile, ok := reviewer.(ports.ReviewerChatProfile); ok && l.reviewChatSupported(profile) {
+			return l.startReviewerChat(ctx, spec, inv, profile, false)
+		}
+	}
 	// A retained native id means this stable reviewer has provider-owned
 	// history even though its terminal process is gone. Recreate the pane by
 	// resuming that conversation; a first launch has no id and still pins the
@@ -441,7 +448,33 @@ func (l *agentLauncher) RestoreTerminal(ctx context.Context, spec LaunchSpec) (L
 	if err != nil {
 		return LaunchResult{}, err
 	}
+	if reviewer, ok := l.reviewers.Reviewer(spec.Harness); ok {
+		if profile, ok := reviewer.(ports.ReviewerChatProfile); ok && l.reviewChatSupported(profile) {
+			return l.startReviewerChat(ctx, spec, inv, profile, true)
+		}
+	}
 	return l.launchReviewerTerminalWithMode(ctx, spec, inv, true)
+}
+
+func (l *agentLauncher) startReviewerChat(ctx context.Context, spec LaunchSpec, inv ports.ReviewInvocation, profile ports.ReviewerChatProfile, restore bool) (LaunchResult, error) {
+	systemPrompt, err := os.ReadFile(inv.SystemPromptFile)
+	if err != nil {
+		return LaunchResult{}, fmt.Errorf("read reviewer system prompt: %w", err)
+	}
+	providerID := strings.TrimSpace(spec.ProviderConversationID)
+	if providerID == "" {
+		providerID = strings.TrimSpace(spec.AgentSessionID)
+	}
+	start := ReviewerChatStart{ReviewID: spec.ReviewSessionID, WorkerID: spec.WorkerID, ProjectID: spec.ProjectID, Harness: profile.ReviewChatHarness(), DataDir: l.dataDir, WorkspacePath: spec.WorkspacePath, Env: l.runtimeEnv(ctx, spec, nil, nil), Prompt: inv.Prompt, SystemPrompt: string(systemPrompt), ProviderConversationID: providerID}
+	if restore {
+		providerID, err = l.chat.RestoreReviewChat(ctx, start)
+	} else {
+		providerID, err = l.chat.StartReviewChat(ctx, start)
+	}
+	if err != nil {
+		return LaunchResult{}, err
+	}
+	return LaunchResult{HandleID: reviewerChatHandlePrefix + spec.ReviewSessionID, LaunchID: strings.TrimSpace(spec.LaunchID), AgentSessionID: providerID}, nil
 }
 
 func (l *agentLauncher) launchReviewerTerminalWithMode(ctx context.Context, spec LaunchSpec, inv ports.ReviewInvocation, restoring bool) (LaunchResult, error) {
