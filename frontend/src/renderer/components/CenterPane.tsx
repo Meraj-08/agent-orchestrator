@@ -683,7 +683,7 @@ export function CenterPane({
 																decorative
 															/>
 														}
-																		isActive={tab.kind === "reviewer" ? target.kind === "reviewer" : reviewerChatSelected && !workspaceActiveTabKey}
+																		isActive={tab.kind === "reviewer" ? target.kind === "reviewer" && !workspaceActiveTabKey : reviewerChatSelected && !workspaceActiveTabKey}
 														label={t("terminal.reviewer")}
 														onSelect={() =>
 															tab.kind === "reviewer"
