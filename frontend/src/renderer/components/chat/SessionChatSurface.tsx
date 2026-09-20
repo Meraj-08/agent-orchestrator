@@ -89,6 +89,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	session,
 	reviewerTerminal,
 	onOpenReviewerTerminal,
+	reviewerChatSelected,
 	onSessionRenamed,
 	reviewerTarget,
 	onSelectChat,
@@ -123,6 +124,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	session: WorkspaceSession;
 	reviewerTerminal?: { handleId: string; harness: string };
 	onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void;
+	reviewerChatSelected?: boolean;
 	onSessionRenamed?: () => void | Promise<void>;
 	reviewerTarget?: Extract<TerminalTarget, { kind: "reviewer" }>;
 	onSelectChat?: () => void;
@@ -483,6 +485,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onSessionRenamed={onSessionRenamed}
 				reviewerTerminal={reviewerTerminal}
 				onOpenReviewerTerminal={onOpenReviewerTerminal}
+				reviewerChatSelected={reviewerChatSelected}
 				reviewerTarget={reviewerTarget}
 				onSelectChat={onSelectChat}
 				shellTerminals={shellTerminals}

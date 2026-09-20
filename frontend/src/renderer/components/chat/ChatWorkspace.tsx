@@ -303,6 +303,8 @@ export interface ChatWorkspaceProps {
 	newWorkDisabled?: boolean;
 	reviewerTerminal?: { handleId: string; harness: string };
 	onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void;
+	/** A typed reviewer owns the body while this worker surface remains mounted. */
+	reviewerChatSelected?: boolean;
 	/** Older durable history is available but not loaded into the DOM yet. */
 	hasOlder?: boolean;
 	loadingOlder?: boolean;
@@ -541,6 +543,7 @@ function ChatWorkspaceContent({
 	newWorkDisabled = false,
 	reviewerTerminal,
 	onOpenReviewerTerminal,
+	reviewerChatSelected = false,
 	session,
 	onSessionRenamed,
 	reviewerTarget,
@@ -665,7 +668,7 @@ function ChatWorkspaceContent({
 	// Selection is durable UI state; availability only controls whether the tab is
 	// offered. Keeping these separate preserves a selected reviewer while an active
 	// session temporarily becomes terminated and later returns.
-	const reviewerActive = Boolean(reviewerTarget && session);
+	const reviewerActive = reviewerChatSelected || Boolean(reviewerTarget && session);
 	const shellActive = Boolean(shellTarget && session);
 	const auxiliaryTabs = useMemo<ChatAuxiliaryTab[]>(
 		() => [
