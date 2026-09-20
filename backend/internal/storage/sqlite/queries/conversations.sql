@@ -474,6 +474,12 @@ INSERT INTO conversation_turns (
     controller_generation, retry_of_turn_id, state, requested_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 
+-- name: InsertReviewConversationTurn :exec
+INSERT INTO conversation_turns (
+    id, conversation_id, handled_by_session_id, handled_by_review_id,
+    provider_turn_id, controller_generation, retry_of_turn_id, state, requested_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
 -- A turn the PROVIDER started that AO never dispatched: a compaction runs as its
 -- own turn, and so does work resumed inside the provider's own history. Without a
 -- row every item it emits correlates to no turn, which silently unpicks the
@@ -485,6 +491,12 @@ INSERT OR IGNORE INTO conversation_turns (
     id, conversation_id, handled_by_session_id, provider_turn_id,
     controller_generation, state, requested_at, started_at
 ) VALUES (?, ?, ?, ?, ?, 'running', ?, ?);
+
+-- name: AdoptReviewProviderConversationTurn :exec
+INSERT OR IGNORE INTO conversation_turns (
+    id, conversation_id, handled_by_session_id, handled_by_review_id,
+    provider_turn_id, controller_generation, state, requested_at, started_at
+) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?);
 
 -- Correlating a provider notification back to its turn happens on every streamed
 -- event, so it is a keyed lookup rather than a scan.

@@ -154,6 +154,38 @@ func (q *Queries) AdoptProviderConversationTurn(ctx context.Context, arg AdoptPr
 	return err
 }
 
+const adoptReviewProviderConversationTurn = `-- name: AdoptReviewProviderConversationTurn :exec
+INSERT OR IGNORE INTO conversation_turns (
+    id, conversation_id, handled_by_session_id, handled_by_review_id,
+    provider_turn_id, controller_generation, state, requested_at, started_at
+) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?)
+`
+
+type AdoptReviewProviderConversationTurnParams struct {
+	ID                   string
+	ConversationID       string
+	HandledBySessionID   domain.SessionID
+	HandledByReviewID    sql.NullString
+	ProviderTurnID       string
+	ControllerGeneration string
+	RequestedAt          time.Time
+	StartedAt            sql.NullTime
+}
+
+func (q *Queries) AdoptReviewProviderConversationTurn(ctx context.Context, arg AdoptReviewProviderConversationTurnParams) error {
+	_, err := q.db.ExecContext(ctx, adoptReviewProviderConversationTurn,
+		arg.ID,
+		arg.ConversationID,
+		arg.HandledBySessionID,
+		arg.HandledByReviewID,
+		arg.ProviderTurnID,
+		arg.ControllerGeneration,
+		arg.RequestedAt,
+		arg.StartedAt,
+	)
+	return err
+}
+
 const appendConversationActivityOutput = `-- name: AppendConversationActivityOutput :execrows
 UPDATE conversation_activities
 SET command_output = substr(command_output || ?1, 1, ?2),
@@ -1093,6 +1125,40 @@ func (q *Queries) InsertReviewConversationBranch(ctx context.Context, arg Insert
 		arg.ReviewID,
 		arg.ProviderConversationID,
 		arg.CreatedAt,
+	)
+	return err
+}
+
+const insertReviewConversationTurn = `-- name: InsertReviewConversationTurn :exec
+INSERT INTO conversation_turns (
+    id, conversation_id, handled_by_session_id, handled_by_review_id,
+    provider_turn_id, controller_generation, retry_of_turn_id, state, requested_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertReviewConversationTurnParams struct {
+	ID                   string
+	ConversationID       string
+	HandledBySessionID   domain.SessionID
+	HandledByReviewID    sql.NullString
+	ProviderTurnID       string
+	ControllerGeneration string
+	RetryOfTurnID        sql.NullString
+	State                domain.TurnState
+	RequestedAt          time.Time
+}
+
+func (q *Queries) InsertReviewConversationTurn(ctx context.Context, arg InsertReviewConversationTurnParams) error {
+	_, err := q.db.ExecContext(ctx, insertReviewConversationTurn,
+		arg.ID,
+		arg.ConversationID,
+		arg.HandledBySessionID,
+		arg.HandledByReviewID,
+		arg.ProviderTurnID,
+		arg.ControllerGeneration,
+		arg.RetryOfTurnID,
+		arg.State,
+		arg.RequestedAt,
 	)
 	return err
 }
