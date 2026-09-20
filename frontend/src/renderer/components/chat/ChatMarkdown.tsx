@@ -41,7 +41,7 @@ import { WrapText } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { canonicalLanguage } from "../../lib/code-highlight";
 import { fenceOf } from "../../lib/markdown-fence";
-import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
+import { isWebLink, isWorkspaceHtmlLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
 import { AppLink } from "../AppLink";
 import {
 	explicitWorkspaceFilePath,
@@ -238,9 +238,10 @@ function MarkdownLink({ href, children }: { href?: string; children?: ReactNode 
 		<AppLink
 			href={href}
 			onBrowserOpen={onLinkOpen}
-			inAppLink={isWebLink}
+			inAppLink={(url) => isWebLink(url) || isWorkspaceHtmlLink(url, [...filePaths])}
 			onClick={(event) => {
 				if (!href) return;
+				if (isWorkspaceHtmlLink(href, [...filePaths])) return;
 				if (filePath && onFileOpen) {
 					event.preventDefault();
 					onFileOpen(filePath);
@@ -251,11 +252,11 @@ function MarkdownLink({ href, children }: { href?: string; children?: ReactNode 
 					void openLinkInSystemBrowser(href);
 				}
 			}}
-			target="_blank"
-			rel="noreferrer noopener"
+			target={filePath ? undefined : "_blank"}
+			rel={filePath ? undefined : "noreferrer noopener"}
 			className="text-markdown-link underline decoration-markdown-link/45 underline-offset-2 transition-colors hover:text-markdown-link-hover hover:decoration-markdown-link-hover/75"
 		>
-			{children}
+			<InsideMarkdownLink.Provider value>{children}</InsideMarkdownLink.Provider>
 		</AppLink>
 	);
 }
