@@ -19,9 +19,9 @@ beforeEach(() => {
 // The point of these is that the SYNTAX stops being visible. Every case here is a
 // shape agents actually emit, and the assertion is that structure replaced markup.
 
-function renderWithLinkHandler(text: string, onLinkOpen: (url: string) => void, workspacePaths: string[] = []) {
+function renderWithLinkHandler(text: string, onLinkOpen: (url: string) => void, filePaths: string[] = []) {
 	return render(
-		<ChatLinkProvider onLinkOpen={onLinkOpen} workspacePaths={workspacePaths}>
+		<ChatLinkProvider onLinkOpen={onLinkOpen} filePaths={filePaths}>
 			<ChatMarkdown text={text} />
 		</ChatLinkProvider>,
 	);
