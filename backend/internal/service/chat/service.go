@@ -935,6 +935,12 @@ func (s *Service) HasLiveChatController(sessionID domain.SessionID) bool {
 	return controller != nil && controller.State() != ports.ChatControllerStopped
 }
 
+// HasLiveControllerForOwner is the typed-owner form used by reviewer chats.
+func (s *Service) HasLiveControllerForOwner(owner domain.ConversationOwner) bool {
+	controller, err := s.ControllerForOwner(owner)
+	return err == nil && controller.State() != ports.ChatControllerStopped
+}
+
 // PreservesProviderOnRestart reports only established live ownership. Unknown
 // or recovering sessions remain conservative for the desktop update warning.
 func (s *Service) PreservesProviderOnRestart(sessionID domain.SessionID) bool {
@@ -1148,6 +1154,29 @@ func (s *Service) Stop(ctx context.Context, id domain.SessionID) error {
 			delete(s.controllers, id)
 		}
 		delete(s.startConfigs, id)
+		s.mu.Unlock()
+	default:
+	}
+	return err
+}
+
+// StopForOwner closes a typed-owner controller without touching its parent
+// worker's Chat controller.
+func (s *Service) StopForOwner(ctx context.Context, owner domain.ConversationOwner) error {
+	controller, err := s.ControllerForOwner(owner)
+	if errors.Is(err, ErrNoController) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	err = controller.Terminate(ctx)
+	select {
+	case <-controller.stopped:
+		s.mu.Lock()
+		if s.ownerControllers[owner] == controller {
+			delete(s.ownerControllers, owner)
+		}
 		s.mu.Unlock()
 	default:
 	}
