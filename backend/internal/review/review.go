@@ -51,6 +51,14 @@ type Store interface {
 	ListRunningReviewRunsBySession(ctx stdctx.Context, id domain.SessionID) ([]domain.ReviewRun, error)
 }
 
+// recoverableChatReviewStore is the optional persistence extension used for
+// durable reviewer-chat recovery. Keeping it narrow avoids making the regular
+// review engine depend on chat-only storage in focused tests.
+type recoverableChatReviewStore interface {
+	ListRecoverableChatReviews(ctx stdctx.Context) ([]domain.Review, error)
+	RecordReviewChatControllerError(ctx stdctx.Context, id, message string, now time.Time) (bool, error)
+}
+
 // Sessions resolves the worker session under review.
 type Sessions interface {
 	GetSession(ctx stdctx.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
@@ -646,6 +654,76 @@ func (e *Engine) RestoreReviewer(ctx stdctx.Context, workerID domain.SessionID) 
 	return e.restoreReviewerLocked(ctx, workerID, worker, harness, config)
 }
 
+// RecoverChatReviewers restores each durable chat reviewer by its persisted
+// review row. It must not re-resolve the worker's current reviewer preference:
+// that preference may have changed since this particular reviewer started.
+func (e *Engine) RecoverChatReviewers(ctx stdctx.Context) error {
+	store, ok := e.store.(recoverableChatReviewStore)
+	if !ok {
+		return nil
+	}
+	reviews, err := store.ListRecoverableChatReviews(ctx)
+	if err != nil {
+		return err
+	}
+	var recoveryErrors []error
+	for _, review := range reviews {
+		if _, restoreErr := e.restoreRecoverableChatReviewer(ctx, review); restoreErr != nil {
+			if _, recordErr := store.RecordReviewChatControllerError(ctx, review.ID, restoreErr.Error(), e.clock()); recordErr != nil {
+				recoveryErrors = append(recoveryErrors, fmt.Errorf("record reviewer %s recovery error: %w", review.ID, recordErr))
+			}
+			recoveryErrors = append(recoveryErrors, fmt.Errorf("recover reviewer %s: %w", review.ID, restoreErr))
+		}
+	}
+	return errors.Join(recoveryErrors...)
+}
+
+func (e *Engine) restoreRecoverableChatReviewer(ctx stdctx.Context, review domain.Review) (RestoreReviewerResult, error) {
+	unlock := e.lockWorker(review.SessionID)
+	defer unlock()
+	worker, ok, err := e.sessions.GetSession(ctx, review.SessionID)
+	if err != nil {
+		return RestoreReviewerResult{}, err
+	}
+	if !ok {
+		return RestoreReviewerResult{}, fmt.Errorf("%w: worker session %q", ErrNotFound, review.SessionID)
+	}
+	if worker.IsTerminated || worker.Metadata.WorkspacePath == "" {
+		return RestoreReviewerResult{}, nil
+	}
+	runs, err := e.store.ListReviewRunsBySession(ctx, review.SessionID)
+	if err != nil {
+		return RestoreReviewerResult{}, err
+	}
+	return e.restorePersistedChatReviewerLocked(ctx, worker, review, reviewRunsForReview(runs, review.ID))
+}
+
+func (e *Engine) restorePersistedChatReviewerLocked(ctx stdctx.Context, worker domain.SessionRecord, review domain.Review, previousRuns []domain.ReviewRun) (RestoreReviewerResult, error) {
+	if review.ReviewerHandleID != "" {
+		alive, err := e.launcher.Alive(ctx, review.ReviewerHandleID)
+		if err != nil {
+			return RestoreReviewerResult{}, err
+		}
+		if alive {
+			return RestoreReviewerResult{ReviewerHandleID: review.ReviewerHandleID}, nil
+		}
+	}
+	launchID := e.newID()
+	launch, err := e.launcher.RestoreTerminal(ctx, LaunchSpec{ReviewSessionID: review.ID, LaunchID: launchID, WorkerID: worker.ID, ProjectID: worker.ProjectID, Harness: review.Harness, WorkspacePath: worker.Metadata.WorkspacePath, AgentSessionID: review.AgentSessionID, ProviderConversationID: review.ProviderConversationID, PreviousRuns: previousRuns})
+	if err != nil {
+		return RestoreReviewerResult{}, fmt.Errorf("restore reviewer: %w", err)
+	}
+	agentSessionID := review.AgentSessionID
+	if launch.AgentSessionID != "" {
+		agentSessionID = launch.AgentSessionID
+	}
+	if _, err := e.upsertReview(ctx, worker, review.Harness, launch.HandleID, agentSessionID, launch.LaunchID, "", e.clock()); err != nil {
+		_ = e.launcher.Destroy(ctx, launch.HandleID)
+		return RestoreReviewerResult{}, err
+	}
+	return RestoreReviewerResult{ReviewerHandleID: launch.HandleID, Restored: true}, nil
+}
+
 func (e *Engine) restoreReviewerLocked(
 	ctx stdctx.Context,
 	workerID domain.SessionID,
@@ -795,6 +873,16 @@ func reviewRunsForHarness(runs []domain.ReviewRun, harness domain.ReviewerHarnes
 	out := make([]domain.ReviewRun, 0, len(runs))
 	for _, run := range runs {
 		if run.Harness == harness {
+			out = append(out, run)
+		}
+	}
+	return out
+}
+
+func reviewRunsForReview(runs []domain.ReviewRun, reviewID string) []domain.ReviewRun {
+	out := make([]domain.ReviewRun, 0, len(runs))
+	for _, run := range runs {
+		if run.ReviewID == reviewID {
 			out = append(out, run)
 		}
 	}
