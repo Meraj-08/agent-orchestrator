@@ -381,7 +381,7 @@ export function TaskComposer({
 			activeAgent={selectedAgentLabel || undefined}
 			activeRole="worker"
 			baseBranch={projectQuery.data?.defaultBranch ?? cloudProject?.defaultBranch}
-			error={projectQuery.isError ? (projectQuery.error instanceof Error ? projectQuery.error.message : t("newTask.configUnavailable")) : undefined}
+			error={!isCloudProject && !isStandalone && projectQuery.isError ? (projectQuery.error instanceof Error ? projectQuery.error.message : t("newTask.configUnavailable")) : undefined}
 			labels={executionContextLabels(t)}
 			loading={!isCloudProject && !isStandalone && projectQuery.isPending}
 			orchestratorAgent={projectQuery.data?.config?.orchestrator?.agent ? selectedAgentLabelFor(projectQuery.data.config.orchestrator.agent, agentCatalog?.agents) : undefined}
