@@ -3,6 +3,7 @@ package codex
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -38,6 +39,14 @@ func TestDetectTerminalActivity(t *testing.T) {
 			name:   "assistant text",
 			output: "The symbol is:\n›\nnot a composer footer\n",
 		},
+		{
+			name:   "empty pane output",
+			output: "",
+		},
+		{
+			name:   "single line pane output",
+			output: "› ",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -61,7 +70,7 @@ func readCodexFixture(t *testing.T, name string) string {
 // Fixtures are codex-cli 0.146.0 TUI renders taken from the openai/codex
 // rust-v0.146.0 insta snapshots (status_widget_and_approval_modal,
 // network_exec_prompt, mcp_server_elicitation_approval_form_without_schema,
-// image_generation_begin_restores_working_status). Codex replaces the working
+// request_user_input_footer_wrap, image_generation_begin_restores_working_status). Codex replaces the working
 // status line with the approval modal, so exec_approval.txt is what a running
 // turn looks like while an approval is pending.
 func TestDetectTerminalActivityCapturedCodexFrames(t *testing.T) {
@@ -74,9 +83,8 @@ func TestDetectTerminalActivityCapturedCodexFrames(t *testing.T) {
 		{"exec approval during a running turn", "exec_approval.txt", domain.ActivityWaitingInput, true},
 		{"network approval", "network_approval.txt", domain.ActivityWaitingInput, true},
 		{"resumed generation", "active_generation.txt", domain.ActivityActive, true},
-		// Unrecognized approval shapes fail closed: no signal, so a recorded
-		// waiting_input is left untouched.
-		{"unrecognized mcp elicitation form", "mcp_elicitation.txt", "", false},
+		{"mcp elicitation form", "mcp_elicitation.txt", domain.ActivityWaitingInput, true},
+		{"agent question with options", "user_input_question.txt", domain.ActivityWaitingInput, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -85,6 +93,33 @@ func TestDetectTerminalActivityCapturedCodexFrames(t *testing.T) {
 				t.Fatalf("DetectTerminalActivity(%s) = (%q, %v), want (%q, %v)", tt.fixture, got, ok, tt.want, tt.ok)
 			}
 		})
+	}
+}
+
+// Codex styles the selected picker row, "›" included, bold (the accent style
+// in rust-v0.146.0's selection_popup_common.rs). A capture taken before the
+// picker's hint row is drawn, or in a viewport too short to show it, is not a
+// recognized picker; the bold-marker fallback must not then read the selected
+// option as the current prompt and report idle or active.
+func TestDetectTerminalActivityFailsClosedOnStyledPartialPicker(t *testing.T) {
+	styled := strings.Replace(readCodexFixture(t, "exec_approval.txt"), "› 1.", "\x1b[1m›\x1b[0m 1.", 1)
+	partial := strings.Replace(styled, "Press enter to confirm or esc to cancel", "", 1)
+	tests := []struct {
+		name   string
+		output string
+	}{
+		{"styled picker without its hint row", partial},
+		{"styled picker without its hint row under a stale working line", strings.Replace(partial, "\x1b[1m›", "• Working (3s • esc to interrupt)\n\x1b[1m›", 1)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got, ok := (&Plugin{}).DetectTerminalActivity(tt.output); ok {
+				t.Fatalf("DetectTerminalActivity() = (%q, true), want no signal", got)
+			}
+		})
+	}
+	if got, ok := (&Plugin{}).DetectTerminalActivity(styled); got != domain.ActivityWaitingInput || !ok {
+		t.Fatalf("complete styled picker = (%q, %v), want (%q, true)", got, ok, domain.ActivityWaitingInput)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -221,6 +222,8 @@ func TestPollReconcilesWaitingCodexOnceTurnResumes(t *testing.T) {
 		{name: "turn finished at composer", output: codexComposerFrame, want: domain.ActivityIdle, signal: true},
 		{name: "approval still pending", output: codexExecApprovalFrame},
 		{name: "stale working line above live picker", output: "• Working (6m 13s • esc to interrupt)\n" + codexExecApprovalFrame},
+		{name: "unrecognized frame", output: "Reading the diff before the next step…\n"},
+		{name: "styled picker without its hint row", output: strings.Replace(strings.Replace(codexExecApprovalFrame, "› 1.", "\x1b[1m›\x1b[0m 1.", 1), "Press enter to confirm or esc to cancel", "", 1)},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			now := time.Unix(500, 0).UTC()
@@ -256,6 +259,38 @@ func TestPollReconcilesWaitingCodexOnceTurnResumes(t *testing.T) {
 				t.Fatalf("reconciliation not fenced on revision: %+v", sink.signals[0])
 			}
 		})
+	}
+}
+
+// panickingCodex parses panes like codex but panics while doing it.
+type panickingCodex struct{ *codex.Plugin }
+
+func (panickingCodex) DetectTerminalActivity(string) (domain.ActivityState, bool) {
+	panic("malformed pane")
+}
+
+func TestPollSurvivesAPanicWhileReconcilingOneSession(t *testing.T) {
+	now := time.Unix(500, 0).UTC()
+	waiting := domain.Activity{State: domain.ActivityWaitingInput, LastActivityAt: now.Add(-time.Second)}
+	broken := activeSession(now, domain.HarnessClaudeCode)
+	broken.Activity = waiting
+	healthy := activeSession(now, domain.HarnessCodex)
+	healthy.ID = "ao-2"
+	healthy.Activity = waiting
+	sink := &fakeSink{}
+	observer := New(
+		fakeSessions{rows: []domain.SessionRecord{broken, healthy}},
+		sink,
+		&fakeRuntime{output: codexRunningFrame},
+		fakeAgents{domain.HarnessClaudeCode: panickingCodex{codex.New()}, domain.HarnessCodex: codex.New()},
+		Config{Clock: func() time.Time { return now }, Logger: testLogger()},
+	)
+
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.signals) != 1 || sink.signals[0].State != domain.ActivityActive {
+		t.Fatalf("healthy session not reconciled after a panic in another: %+v", sink.signals)
 	}
 }
 

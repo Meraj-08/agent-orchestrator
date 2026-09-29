@@ -65,6 +65,14 @@ func (p *Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObse
 			}
 		}
 	}
+	if prompt >= 0 && codexNumberedOption(strings.TrimSpace(strings.TrimPrefix(lines[prompt], "›"))) {
+		// A numbered option in the prompt position is a picker whose hint row is
+		// not on screen yet (mid-redraw, or a viewport too short for it). Codex
+		// styles the selected option bold, so the fallback above can land on it;
+		// report nothing rather than read the selection as the composer.
+		observation.Composer = ports.TerminalComposerUnknown
+		return observation
+	}
 	if prompt >= 0 {
 		observation.NativeConversationNotStarted = codexInitialComposer(lines, prompt)
 		if prompt > start && codexActiveStatusLine(lines[prompt-1]) {
@@ -168,6 +176,8 @@ func codexConfirmationHint(line string) bool {
 	lower := strings.ToLower(line)
 	return strings.Contains(lower, "press enter to confirm") ||
 		strings.Contains(lower, "enter to select") ||
+		// MCP elicitation forms and agent questions with options.
+		strings.Contains(lower, "enter to submit") ||
 		strings.Contains(lower, "esc to go back")
 }
 
