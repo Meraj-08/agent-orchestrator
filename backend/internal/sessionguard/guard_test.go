@@ -103,19 +103,20 @@ func TestGuard_DeliverWithComposerCheck(t *testing.T) {
 	}
 }
 
-func TestGuard_ComposerCheckRunsUnderInputLeaseBeforeWrite(t *testing.T) {
-	// The composer check must run while the input lease is held and before the
-	// pane write, so a proven draft refuses without ever reaching the messenger.
+func TestGuard_ComposerCheckRunsWhileTheInputLeaseIsHeld(t *testing.T) {
+	// The composer check must run between acquiring and releasing the input
+	// lease, and before the pane write, so a human keystroke cannot land between
+	// the check and the write and a proven draft never reaches the messenger.
 	msgr := &fakeMessenger{}
 	g := New(&fakeStore{rec: record(domain.ActivityIdle, false), ok: true}, msgr, nil)
-	g.SetInputLease(fixedInputLease(true))
+	lease := &observedInputLease{acquired: make(chan struct{}), released: make(chan struct{})}
+	g.SetInputLease(lease)
 
-	leaseHeldAtCheck := false
+	var leaseHeld, beforeWrite bool
 	got, err := g.DeliverWithComposerCheck(context.Background(), "s1", "hello",
 		func(context.Context, domain.SessionRecord) bool {
-			// The lease was acquired in sendThenChecked before this runs; the
-			// messenger has not been called yet.
-			leaseHeldAtCheck = len(msgr.sent) == 0
+			leaseHeld = isClosed(lease.acquired) && !isClosed(lease.released)
+			beforeWrite = len(msgr.sent) == 0
 			return true
 		}, nil)
 	if err != nil {
@@ -124,11 +125,54 @@ func TestGuard_ComposerCheckRunsUnderInputLeaseBeforeWrite(t *testing.T) {
 	if got != SuppressedComposerBusy {
 		t.Fatalf("outcome = %v, want SuppressedComposerBusy", got)
 	}
-	if !leaseHeldAtCheck {
-		t.Fatal("composer check ran after the write; it must run before")
+	if !leaseHeld {
+		t.Fatal("composer check ran without the input lease held")
+	}
+	if !beforeWrite || len(msgr.sent) != 0 {
+		t.Fatalf("composer check must run before any write; sent=%v", msgr.sent)
+	}
+	if !isClosed(lease.released) {
+		t.Fatal("input lease was not released after the refusal")
+	}
+}
+
+func TestGuard_CancelledContextNeverWrites(t *testing.T) {
+	// A probe that is cancelled reports "no draft" (it fails open), but the
+	// caller is gone: the write must not happen on a cancelled context.
+	msgr := &fakeMessenger{}
+	g := New(&fakeStore{rec: record(domain.ActivityIdle, false), ok: true}, msgr, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	_, err := g.DeliverWithComposerCheck(ctx, "s1", "hello",
+		func(context.Context, domain.SessionRecord) bool {
+			cancel()
+			return false
+		}, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 	if len(msgr.sent) != 0 {
-		t.Fatalf("messenger was called despite a proven draft: %v", msgr.sent)
+		t.Fatalf("wrote on a cancelled context: %v", msgr.sent)
+	}
+}
+
+func TestGuard_MutationDeliveryIsNeverComposerGated(t *testing.T) {
+	// AO mutations (agent switch handoffs) own the session's exclusive fence and
+	// must write their prompt; they have no composer check to consult.
+	msgr := &fakeMessenger{}
+	g := New(&fakeStore{rec: record(domain.ActivityIdle, false), ok: true}, msgr, nil)
+	got, err := g.DeliverUnderMutationChecked(context.Background(), "s1", "handoff",
+		func(context.Context, domain.SessionRecord) error { return nil })
+	if err != nil || got != Sent || len(msgr.sent) != 1 {
+		t.Fatalf("DeliverUnderMutationChecked = (%v, %v), sent=%v; want Sent", got, err, msgr.sent)
+	}
+}
+
+func isClosed(ch chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -386,7 +430,7 @@ func TestGuard_DeliverPostWriteRunsBeforeInputLeaseRelease(t *testing.T) {
 	g := New(&fakeStore{rec: record(domain.ActivityActive, false), ok: true}, &fakeMessenger{}, nil)
 	g.SetInputLease(lease)
 	callbackRan := false
-	outcome, err := g.DeliverWithPostWrite(context.Background(), "s1", "hello", func(context.Context) error {
+	outcome, err := g.DeliverWithComposerCheck(context.Background(), "s1", "hello", nil, func(context.Context) error {
 		select {
 		case <-lease.released:
 			t.Fatal("input lease released before post-write callback")
@@ -396,7 +440,7 @@ func TestGuard_DeliverPostWriteRunsBeforeInputLeaseRelease(t *testing.T) {
 		return nil
 	})
 	if err != nil || outcome != Sent || !callbackRan {
-		t.Fatalf("DeliverWithPostWrite = (%v, %v), callback=%v", outcome, err, callbackRan)
+		t.Fatalf("DeliverWithComposerCheck = (%v, %v), callback=%v", outcome, err, callbackRan)
 	}
 	select {
 	case <-lease.released:

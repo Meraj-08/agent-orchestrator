@@ -295,6 +295,13 @@ type TerminalInputGate interface {
 	BeginInputDrain(terminalID string) (lastInputAt time.Time, release func())
 }
 
+// TerminalInputObserver is an optional TerminalInputGate capability: it reports
+// the newest accepted keystroke without closing input. Keystrokes arriving while
+// a drain is held are dropped, not buffered, so a read must never open a drain.
+type TerminalInputObserver interface {
+	LastInputAt(terminalID string) time.Time
+}
+
 // ReviewerTerminator tears down a worker's reviewer pane when the worker leaves
 // its live lifecycle. It is late-bound like ShellTerminalCloser because review
 // services are assembled after the session manager in daemon wiring.
@@ -624,6 +631,24 @@ func (m *Manager) beginTerminalInputDrain(rec domain.SessionRecord) (lastInputAt
 		return time.Time{}, nil
 	}
 	return gate.BeginInputDrain(handle.ID)
+}
+
+// lastTerminalInputAt reports the newest keystroke AO accepted for a TUI
+// session's terminal, read-only. It is zero when nothing was typed through AO
+// or the gate cannot be read without closing input.
+func (m *Manager) lastTerminalInputAt(rec domain.SessionRecord) time.Time {
+	handle := runtimeHandle(rec.Metadata)
+	if domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeTUI || handle.ID == "" {
+		return time.Time{}
+	}
+	m.terminalInputGateMu.Lock()
+	gate := m.terminalInputGate
+	m.terminalInputGateMu.Unlock()
+	observer, ok := gate.(TerminalInputObserver)
+	if !ok {
+		return time.Time{}
+	}
+	return observer.LastInputAt(handle.ID)
 }
 
 // beginShellTerminalTeardown starts the shell-terminal gate for id ahead of
@@ -4195,12 +4220,13 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 			}
 		}
 	}
-	// A non-empty user-initiated send must not land in a composer that holds an
-	// unsent human draft (#5711). An empty message is the deliberate Enter that
-	// submits an existing draft, so it is left unchecked. The check runs under the
+	// A non-empty send must not land in a composer that holds an unsent human
+	// draft (#5711). An empty message is the deliberate Enter that submits an
+	// existing draft, and an internal report delivery has no durable queue to
+	// retry a refusal from, so both are left unchecked. The check runs under the
 	// guard's held input lease, immediately before the write.
 	var composerBusy func(context.Context, domain.SessionRecord) bool
-	if strings.TrimSpace(message) != "" {
+	if strings.TrimSpace(message) != "" && !internalReportDelivery {
 		composerBusy = m.composerBusyCheck()
 	}
 	outcome, err := m.messenger.DeliverWithComposerCheck(ctx, id, message, composerBusy, afterWrite)

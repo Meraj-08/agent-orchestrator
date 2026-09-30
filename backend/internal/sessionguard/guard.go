@@ -205,22 +205,16 @@ func (g *Guard) Deliver(ctx context.Context, id domain.SessionID, msg string) (O
 	return g.send(ctx, id, msg, g.refuseDeliver)
 }
 
-// DeliverWithPostWrite is Deliver plus a callback that runs only after a
-// successful pane write and while the same input lease is still held. Session
-// Manager uses it to persist narrow message facts before a provider switch can
-// close admission and snapshot handoff context.
-func (g *Guard) DeliverWithPostWrite(ctx context.Context, id domain.SessionID, msg string, after func(context.Context) error) (Outcome, error) {
-	return g.sendThen(ctx, id, msg, g.refuseDeliver, after)
-}
-
-// DeliverWithComposerCheck is DeliverWithPostWrite plus a caller-owned check for
-// an unsent human draft in the composer, run under the held input lease and the
-// just-in-time session read, immediately before the pane write. composerBusy
-// returns true ONLY when a draft is positively proven; every uncertain or
-// unprovable case must return false so delivery is preserved (#5711). A proven
-// draft refuses with SuppressedComposerBusy instead of concatenating the
-// operator's half-typed text with the delivered message. after runs only after a
-// successful write, as in DeliverWithPostWrite.
+// DeliverWithComposerCheck is Deliver plus two optional callbacks, both run
+// while the same input lease is held. composerBusy checks for an unsent human
+// draft in the composer on the just-in-time session read, immediately before
+// the pane write; it returns true ONLY when a draft is positively proven, and
+// every uncertain or unprovable case must return false so delivery is preserved
+// (#5711). A proven draft refuses with SuppressedComposerBusy instead of
+// concatenating the operator's half-typed text with the delivered message.
+// after runs only after a successful pane write; Session Manager uses it to
+// persist narrow message facts before a provider switch can close admission and
+// snapshot handoff context.
 func (g *Guard) DeliverWithComposerCheck(
 	ctx context.Context,
 	id domain.SessionID,
@@ -250,9 +244,11 @@ func (g *Guard) DeliverUnderMutationChecked(
 	msg string,
 	preWrite func(context.Context, domain.SessionRecord) error,
 ) (Outcome, error) {
+	// An AO mutation owns the session's exclusive fence and must write its own
+	// prompt, so it is never composer-gated.
 	return g.sendAdmittedChecked(ctx, id, msg, func(rec domain.SessionRecord) (Outcome, bool) {
 		return SuppressedAwaitingUser, rec.Activity.State == domain.ActivityBlocked
-	}, preWrite)
+	}, preWrite, nil)
 }
 
 // CoordinationUnderMutation writes an AO coordination message while the caller
@@ -384,11 +380,7 @@ func (g *Guard) NudgeCoordination(ctx context.Context, id domain.SessionID, msg 
 // available without scraping the terminal. Fail closed: a store error
 // suppresses the write rather than pressing Enter on an unknown state.
 func (g *Guard) send(ctx context.Context, id domain.SessionID, msg string, refuse func(domain.SessionRecord) (Outcome, bool)) (Outcome, error) {
-	return g.sendThen(ctx, id, msg, refuse, nil)
-}
-
-func (g *Guard) sendThen(ctx context.Context, id domain.SessionID, msg string, refuse func(domain.SessionRecord) (Outcome, bool), after func(context.Context) error) (Outcome, error) {
-	return g.sendThenChecked(ctx, id, msg, refuse, nil, after)
+	return g.sendThenChecked(ctx, id, msg, refuse, nil, nil)
 }
 
 func (g *Guard) sendThenChecked(ctx context.Context, id domain.SessionID, msg string, refuse func(domain.SessionRecord) (Outcome, bool), composerBusy func(context.Context, domain.SessionRecord) bool, after func(context.Context) error) (Outcome, error) {
@@ -454,6 +446,11 @@ func (g *Guard) sendAdmittedChecked(ctx context.Context, id domain.SessionID, ms
 	if composerBusy != nil && composerBusy(ctx, rec) {
 		g.logger.Info("sessionguard: write suppressed", "sessionID", id, "reason", SuppressedComposerBusy.String(), "state", string(rec.Activity.State))
 		return SuppressedComposerBusy, nil
+	}
+	// A cancelled probe reports "no draft" so it fails open, but its caller is
+	// gone: never let that turn into a write.
+	if err := ctx.Err(); err != nil {
+		return SuppressedUnknown, fmt.Errorf("guard %s: %w", id, err)
 	}
 	if err := g.messenger.Send(ctx, id, msg); err != nil {
 		return Sent, fmt.Errorf("guard %s: send: %w", id, err)
