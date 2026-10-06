@@ -212,6 +212,38 @@ describe("send keys", () => {
 		expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
 	});
 
+	it("turns the empty send action into Continue after a stop, and back into Send once typed", async () => {
+		const onContinue = vi.fn();
+		const { onSend, field } = renderComposer({ onContinue });
+
+		const resume = screen.getByRole("button", { name: "Continue turn" });
+		expect(screen.queryByRole("button", { name: "Send message" })).not.toBeInTheDocument();
+		await userEvent.click(resume);
+		expect(onContinue).toHaveBeenCalledOnce();
+		expect(onSend).not.toHaveBeenCalled();
+
+		// Asking something else instead: a draft turns the same button into Send.
+		await typeInComposer(field, "a different question");
+		expect(screen.queryByRole("button", { name: "Continue turn" })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		expect(onSend).toHaveBeenCalledWith("a different question");
+	});
+
+	it("keeps Stop while the agent is working, even when a stopped turn could be continued", () => {
+		renderComposer({ willQueue: true, onInterrupt: vi.fn(), onContinue: vi.fn() });
+		expect(screen.getByRole("button", { name: "Stop turn" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Continue turn" })).not.toBeInTheDocument();
+	});
+
+	it("shows why Continue failed and offers it again", async () => {
+		const onContinue = vi.fn().mockRejectedValueOnce(new Error("The agent is not accepting messages"));
+		renderComposer({ onContinue });
+
+		await userEvent.click(screen.getByRole("button", { name: "Continue turn" }));
+		expect(await screen.findByText("The agent is not accepting messages")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Continue turn" })).toBeEnabled();
+	});
+
 	it("sends on Enter", async () => {
 		const { onSend, field } = renderComposer();
 		await typeInComposer(field, "hello");

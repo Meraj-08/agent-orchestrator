@@ -326,6 +326,7 @@ type ConversationMessage struct {
 	DeliveryContentJson string
 	BranchID            string
 	ClientPayloadHash   sql.NullString
+	Continuation        int64
 }
 
 type ConversationProviderEvent struct {

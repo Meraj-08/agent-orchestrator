@@ -47,7 +47,7 @@ import type { ConversationSnapshot } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
 import type { AgentSwitchSummary, WorkspaceSession } from "../../types/workspace";
 import { AgentSwitchProgressTrack } from "../AgentSwitchProgressTrack";
-import { ChatWorkspace } from "./ChatWorkspace";
+import { CONTINUE_STOPPED_TURN_PROMPT, ChatWorkspace } from "./ChatWorkspace";
 import { hasProviderPermissionMode } from "./TurnSettingsBar";
 
 export interface ConversationWorkState {
@@ -542,6 +542,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onDecide={commands.resolve}
 				onResolveInput={commands.resolveInput}
 				onInterrupt={commands.interrupt}
+				onContinueTurn={() => commands.send({ text: CONTINUE_STOPPED_TURN_PROMPT, continuation: true })}
 				onResumeAgent={() => {
 					void commands.resumeAgent().catch(() => {});
 				}}

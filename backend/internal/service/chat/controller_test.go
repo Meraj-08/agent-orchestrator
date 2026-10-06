@@ -6994,3 +6994,24 @@ func TestReservedBoundaryAdoptsSuccessorHandleWithoutRewritingHistory(t *testing
 		t.Fatalf("ancestor branch = %+v, want the recorded handle untouched", keptSource)
 	}
 }
+
+// A continue after a stop reaches the agent as an ordinary message, while the
+// stored message keeps the continuation fact the timeline draws as a marker.
+func TestSendContinuationDeliversTextAndRecordsTheFact(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "Continue from where you stopped.", ClientMessageID: "c-continue",
+		Origin: domain.MessageOriginHuman, Continuation: true,
+	}); err != nil {
+		t.Fatalf("Send continuation: %v", err)
+	}
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 1 })
+	if !snapshot.Messages[0].Continuation {
+		t.Fatalf("stored message = %#v, want continuation", snapshot.Messages[0])
+	}
+	if got := h.conv.sentTexts(); len(got) != 1 || got[0] != "Continue from where you stopped." {
+		t.Fatalf("provider received %v, want the continue text", got)
+	}
+}

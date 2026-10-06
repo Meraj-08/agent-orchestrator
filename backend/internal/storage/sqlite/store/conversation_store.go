@@ -1017,6 +1017,7 @@ func (s *Store) appendUserMessage(
 			ClientMessageID:     msg.ClientMessageID,
 			ClientPayloadHash:   sql.NullString{String: msg.ClientPayloadHash, Valid: msg.ClientPayloadHash != ""},
 			DeliveryContentJson: msg.DeliveryContentJSON,
+			Continuation:        boolInt(msg.Continuation),
 			CreatedAt:           now,
 			UpdatedAt:           now,
 		}); err != nil {
@@ -3499,6 +3500,7 @@ func messageToDomain(row gen.ConversationMessage) domain.ConversationMessage {
 		ClientMessageID:     row.ClientMessageID,
 		ClientPayloadHash:   row.ClientPayloadHash.String,
 		DeliveryContentJSON: row.DeliveryContentJson,
+		Continuation:        row.Continuation != 0,
 		CreatedAt:           row.CreatedAt,
 		UpdatedAt:           row.UpdatedAt,
 	}

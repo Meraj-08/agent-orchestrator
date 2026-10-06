@@ -67,6 +67,8 @@ export interface ConversationSendInput {
 	resources?: WireResourceContent[];
 	/** Caller-owned durable idempotency key used for crash-safe retries. */
 	clientMessageId?: string;
+	/** The user's one-click "continue" after stopping a turn. */
+	continuation?: boolean;
 }
 
 interface ConversationSendMutationInput {
@@ -123,6 +125,8 @@ type ConversationDispatchTrackingBySession = Record<string, ConversationDispatch
 export type ConversationLocalEcho = {
 	clientMessageId: string;
 	text: string;
+	/** A continue after a stop, drawn as a marker while it is sent. */
+	continuation?: boolean;
 	createdAt: string;
 	/** Filled after the daemon accepts the send, then used for exact reconciliation. */
 	turnId?: string;
@@ -471,6 +475,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			addConversationLocalEcho(queryClient, stateKey(variables.targetSessionId), {
 				clientMessageId: variables.clientMessageId,
 				text: variables.input.text,
+				continuation: variables.input.continuation,
 				createdAt: new Date().toISOString(),
 			});
 			queryClient.setQueryData<ConversationDispatchTrackingBySession>(
@@ -1683,6 +1688,7 @@ function toMessage(wire: WireMessage): ConversationMessage {
 			name: item.name || undefined,
 		})),
 		editAvailable: wire.editAvailable ?? undefined,
+		continuation: wire.continuation || undefined,
 		streaming: wire.streaming,
 		createdAt: wire.createdAt,
 	};

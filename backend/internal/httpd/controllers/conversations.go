@@ -730,6 +730,7 @@ func (c *ConversationsController) send(w http.ResponseWriter, r *http.Request) {
 		Content:         content,
 		ClientMessageID: req.ClientMessageID,
 		Origin:          domain.MessageOriginHuman,
+		Continuation:    req.Continuation,
 	})
 	if err != nil {
 		writeConversationError(w, r, err)
@@ -1086,16 +1087,17 @@ func conversationSnapshotResponse(s chatsvc.Snapshot) ConversationSnapshotRespon
 
 	for _, msg := range s.Messages {
 		message := ConversationMessageResponse{
-			Kind:      "message",
-			ID:        msg.ID,
-			TurnID:    msg.TurnID,
-			Sequence:  msg.Sequence,
-			Revision:  msg.Revision,
-			Role:      string(msg.Role),
-			Origin:    string(msg.Origin),
-			Text:      msg.Text,
-			Streaming: msg.Streaming,
-			CreatedAt: msg.CreatedAt.UTC().Format(time.RFC3339),
+			Kind:         "message",
+			ID:           msg.ID,
+			TurnID:       msg.TurnID,
+			Sequence:     msg.Sequence,
+			Revision:     msg.Revision,
+			Role:         string(msg.Role),
+			Origin:       string(msg.Origin),
+			Text:         msg.Text,
+			Streaming:    msg.Streaming,
+			Continuation: msg.Continuation,
+			CreatedAt:    msg.CreatedAt.UTC().Format(time.RFC3339),
 		}
 		message.Content, message.EditAvailable = conversationContentSummary(msg)
 		message.EditAvailable = message.EditAvailable && msg.Sequence > s.EditFloorSequence

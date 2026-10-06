@@ -2258,6 +2258,10 @@ type SendConversationMessageRequest struct {
 	ClientMessageID string                               `json:"clientMessageId,omitempty"`
 	Attachments     []ConversationImageContentRequest    `json:"attachments,omitempty"`
 	Resources       []ConversationResourceContentRequest `json:"resources,omitempty"`
+	// Continuation marks the user's one-click "continue" after stopping a turn:
+	// the agent receives Text as usual, and the timeline shows a marker instead
+	// of a message bubble.
+	Continuation bool `json:"continuation,omitempty"`
 }
 
 // ConversationImageContentRequest is a native raster image prompt block.
@@ -2592,8 +2596,11 @@ type ConversationMessageResponse struct {
 	Content       []ConversationContentSummaryResponse `json:"content,omitempty"`
 	EditAvailable bool                                 `json:"editAvailable"`
 	// Streaming is true while more deltas are expected for this message.
-	Streaming bool   `json:"streaming"`
-	CreatedAt string `json:"createdAt"`
+	Streaming bool `json:"streaming"`
+	// Continuation is the user's one-click "continue" after stopping a turn,
+	// shown as a marker instead of a message bubble.
+	Continuation bool   `json:"continuation,omitempty"`
+	CreatedAt    string `json:"createdAt"`
 }
 
 // ConversationActivityResponse is one non-message timeline entry.

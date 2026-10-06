@@ -3658,6 +3658,7 @@ export interface components {
         };
         ConversationMessageResponse: {
             content?: components["schemas"]["ConversationContentSummaryResponse"][];
+            continuation?: boolean;
             createdAt: string;
             editAvailable: boolean;
             id: string;
@@ -4645,6 +4646,7 @@ export interface components {
         SendConversationMessageRequest: {
             attachments?: components["schemas"]["ConversationImageContentRequest"][];
             clientMessageId?: string;
+            continuation?: boolean;
             resources?: components["schemas"]["ConversationResourceContentRequest"][];
             text: string;
         };

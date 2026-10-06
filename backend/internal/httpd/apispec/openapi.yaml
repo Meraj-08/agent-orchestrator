@@ -10914,6 +10914,8 @@ components:
           items:
             $ref: '#/components/schemas/ConversationContentSummaryResponse'
           type: array
+        continuation:
+          type: boolean
         createdAt:
           type: string
         editAvailable:
@@ -13521,6 +13523,8 @@ components:
           type: array
         clientMessageId:
           type: string
+        continuation:
+          type: boolean
         resources:
           items:
             $ref: '#/components/schemas/ConversationResourceContentRequest'

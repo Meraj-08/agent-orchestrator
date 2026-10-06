@@ -93,6 +93,7 @@ import {
 	ApprovalCard,
 	AssistantMessage,
 	CompactionMarker,
+	ContinuedMarker,
 	HumanMessage,
 	OriginMessage,
 	SteerMessage,
@@ -171,6 +172,23 @@ const CHAT_FONT_SIZE_DEFAULT = 14;
 
 const WHEEL_ZOOM_THRESHOLD = 80;
 const WHEEL_ZOOM_RESET_MS = 250;
+
+// Sent as the user's own message when they continue a stopped turn, like play
+// after pause. The agent keeps the stopped turn's partial work in its context,
+// so a plain instruction is enough to carry on.
+export const CONTINUE_STOPPED_TURN_PROMPT = "Continue from where you stopped.";
+
+/** The latest turn that still counts is one the user stopped. */
+function latestTurnWasStopped(snapshot: ConversationSnapshot): boolean {
+	for (let index = snapshot.turns.length - 1; index >= 0; index -= 1) {
+		const candidate = snapshot.turns[index]!;
+		// An undone turn is gone from the agent's memory, and messages cancelled
+		// by the Stop itself were never sent; neither is the turn to continue.
+		if (candidate.rolledBack || candidate.state === "cancelled") continue;
+		return candidate.state === "interrupted";
+	}
+	return false;
+}
 
 export interface ChatRetryControl {
 	retry: (turnId: string) => void | Promise<unknown>;
@@ -310,6 +328,12 @@ export interface ChatWorkspaceProps {
 		content?: Record<string, unknown>,
 	) => Promise<unknown> | void;
 	onInterrupt?: () => void;
+	/**
+	 * Continues the latest turn after the user stopped it, sending
+	 * CONTINUE_STOPPED_TURN_PROMPT as a continuation. Offered on the composer's
+	 * button while that turn is the latest and nothing is running.
+	 */
+	onContinueTurn?: () => Promise<unknown> | void;
 	commandError?: string;
 	onResumeAgent?: () => void;
 	resumingAgent?: boolean;
@@ -565,6 +589,7 @@ function ChatWorkspaceContent({
 	onDecide,
 	onResolveInput,
 	onInterrupt,
+	onContinueTurn,
 	commandError,
 	onResumeAgent,
 	resumingAgent,
@@ -633,6 +658,7 @@ function ChatWorkspaceContent({
 		[assetBaseUrl],
 	);
 	const turn = activeTurn(snapshot);
+	const canContinue = Boolean(onContinueTurn) && !turn && !newWorkDisabled && latestTurnWasStopped(snapshot);
 	const hasPendingInteraction = snapshot.items.some(
 		(item) =>
 			item.kind === "activity" &&
@@ -1470,6 +1496,7 @@ function ChatWorkspaceContent({
 									onQueuedAttachmentsChange={changeQueuedStagedAttachments}
 									onQueuedRetainedAttachmentsChange={changeQueuedRetainedAttachments}
 									onInterrupt={turn && !newWorkDisabled ? stableInterrupt : undefined}
+									onContinue={canContinue && !queueEdit ? onContinueTurn : undefined}
 									commandError={queueDraftError ?? (queueEdit && !queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId) ? "chat.draft.queueMissing" : commandError)}
 									settings={<><ContextMeter usage={snapshot.usage} />{composerSettings}</>}
 									busy={busy}
@@ -2618,6 +2645,7 @@ function Timeline({
 				role: "user",
 				origin: "human",
 				text: echo.text,
+				continuation: echo.continuation,
 				streaming: false,
 				delivery: echo.turnId ? "accepted" : "sending",
 				createdAt: echo.createdAt,
@@ -3487,6 +3515,9 @@ function TimelineItem({
 				/>
 			);
 		}
+		// A continue after a stop reaches the agent as a message, but the user did
+		// not write it: mark where the turn picked back up instead of a bubble.
+		if (item.origin === "human" && item.continuation) return <ContinuedMarker />;
 		// A user-role message that did not come from this human is an automation or
 		// worker relay, and is attributed differently.
 		if (item.origin === "human") {

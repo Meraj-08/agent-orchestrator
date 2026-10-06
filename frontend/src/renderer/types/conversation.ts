@@ -176,6 +176,8 @@ export interface ConversationMessage {
 	content?: ConversationContentSummary[];
 	/** False when the original prompt content cannot be reproduced safely. */
 	editAvailable?: boolean;
+	/** The user's one-click "continue" after stopping a turn; drawn as a marker, not a bubble. */
+	continuation?: boolean;
 	/** True while more deltas are expected. */
 	streaming: boolean;
 	delivery?: DeliveryState;

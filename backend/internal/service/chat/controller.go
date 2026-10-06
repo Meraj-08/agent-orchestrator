@@ -1404,6 +1404,7 @@ func (c *Controller) sendLocked(
 		ClientPayloadHash:   msg.ClientPayloadHash,
 		DeliveryContentJSON: deliveryContent,
 		AuthoredByUser:      msg.AuthoredByUser,
+		Continuation:        msg.Continuation,
 	}
 
 	var (
