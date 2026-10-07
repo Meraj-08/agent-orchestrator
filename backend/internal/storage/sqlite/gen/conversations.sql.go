@@ -601,6 +601,32 @@ func (q *Queries) FailOrphanedConversationActivities(ctx context.Context, arg Fa
 	return err
 }
 
+const failOrphanedReviewActivities = `-- name: FailOrphanedReviewActivities :exec
+UPDATE conversation_activities
+SET status = 'failed', revision = revision + 1, updated_at = ?1
+WHERE conversation_activities.conversation_id = ?2
+  AND status = 'running'
+  AND conversation_activities.turn_id IN (
+      SELECT conversation_turns.id FROM conversation_turns
+      WHERE conversation_turns.conversation_id = ?2
+        AND conversation_turns.handled_by_review_id = ?3
+        AND conversation_turns.state IN ('queued', 'running')
+  )
+`
+
+type FailOrphanedReviewActivitiesParams struct {
+	UpdatedAt      time.Time
+	ConversationID string
+	ReviewID       sql.NullString
+}
+
+// Reviewer Chat has its own controller generation on review, separate from
+// the worker session. Settle only turns owned by that review conversation.
+func (q *Queries) FailOrphanedReviewActivities(ctx context.Context, arg FailOrphanedReviewActivitiesParams) error {
+	_, err := q.db.ExecContext(ctx, failOrphanedReviewActivities, arg.UpdatedAt, arg.ConversationID, arg.ReviewID)
+	return err
+}
+
 const failPendingConversationApprovals = `-- name: FailPendingConversationApprovals :exec
 UPDATE conversation_activities
 SET status = 'failed', revision = revision + 1, updated_at = ?
@@ -663,6 +689,30 @@ type FailPendingConversationRequestsForSessionParams struct {
 // session; conversation-wide cleanup would also fail the replacement's requests.
 func (q *Queries) FailPendingConversationRequestsForSession(ctx context.Context, arg FailPendingConversationRequestsForSessionParams) error {
 	_, err := q.db.ExecContext(ctx, failPendingConversationRequestsForSession, arg.UpdatedAt, arg.TargetConversationID, arg.HandledBySessionID)
+	return err
+}
+
+const failPendingReviewRequests = `-- name: FailPendingReviewRequests :exec
+UPDATE conversation_activities
+SET status = 'failed', revision = revision + 1, updated_at = ?1
+WHERE conversation_activities.conversation_id = ?2
+  AND kind IN ('approval', 'user_input')
+  AND status = 'pending'
+  AND conversation_activities.turn_id IN (
+    SELECT conversation_turns.id FROM conversation_turns
+    WHERE conversation_turns.conversation_id = ?2
+      AND conversation_turns.handled_by_review_id = ?3
+  )
+`
+
+type FailPendingReviewRequestsParams struct {
+	UpdatedAt      time.Time
+	ConversationID string
+	ReviewID       sql.NullString
+}
+
+func (q *Queries) FailPendingReviewRequests(ctx context.Context, arg FailPendingReviewRequestsParams) error {
+	_, err := q.db.ExecContext(ctx, failPendingReviewRequests, arg.UpdatedAt, arg.ConversationID, arg.ReviewID)
 	return err
 }
 
@@ -921,8 +971,9 @@ const insertConversationMessage = `-- name: InsertConversationMessage :exec
 INSERT INTO conversation_messages (
     id, conversation_id, turn_id, sequence, revision, role, origin,
     text, streaming, provider_item_id, client_message_id, client_payload_hash,
-    delivery_content_json, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    delivery_content_json, sender_session_id, sender_project_id, sender_display_name,
+    created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertConversationMessageParams struct {
@@ -939,6 +990,9 @@ type InsertConversationMessageParams struct {
 	ClientMessageID     string
 	ClientPayloadHash   sql.NullString
 	DeliveryContentJson string
+	SenderSessionID     string
+	SenderProjectID     string
+	SenderDisplayName   string
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
 }
@@ -958,6 +1012,9 @@ func (q *Queries) InsertConversationMessage(ctx context.Context, arg InsertConve
 		arg.ClientMessageID,
 		arg.ClientPayloadHash,
 		arg.DeliveryContentJson,
+		arg.SenderSessionID,
+		arg.SenderProjectID,
+		arg.SenderDisplayName,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 	)
@@ -2361,7 +2418,7 @@ func (q *Queries) SelectConversationEditDelivery(ctx context.Context, arg Select
 }
 
 const selectConversationMessageByClientID = `-- name: SelectConversationMessageByClientID :one
-SELECT id, conversation_id, turn_id, sequence, revision, role, origin, text, streaming, provider_item_id, client_message_id, created_at, updated_at, delivery_content_json, branch_id, client_payload_hash FROM conversation_messages
+SELECT id, conversation_id, turn_id, sequence, revision, role, origin, text, streaming, provider_item_id, client_message_id, created_at, updated_at, delivery_content_json, branch_id, client_payload_hash, sender_session_id, sender_project_id, sender_display_name FROM conversation_messages
 WHERE conversation_id = ? AND client_message_id = ?
 LIMIT 1
 `
@@ -2391,12 +2448,15 @@ func (q *Queries) SelectConversationMessageByClientID(ctx context.Context, arg S
 		&i.DeliveryContentJson,
 		&i.BranchID,
 		&i.ClientPayloadHash,
+		&i.SenderSessionID,
+		&i.SenderProjectID,
+		&i.SenderDisplayName,
 	)
 	return i, err
 }
 
 const selectConversationMessageByProviderItem = `-- name: SelectConversationMessageByProviderItem :one
-SELECT id, conversation_id, turn_id, sequence, revision, role, origin, text, streaming, provider_item_id, client_message_id, created_at, updated_at, delivery_content_json, branch_id, client_payload_hash FROM conversation_messages
+SELECT id, conversation_id, turn_id, sequence, revision, role, origin, text, streaming, provider_item_id, client_message_id, created_at, updated_at, delivery_content_json, branch_id, client_payload_hash, sender_session_id, sender_project_id, sender_display_name FROM conversation_messages
 WHERE conversation_id = ? AND provider_item_id = ?
 LIMIT 1
 `
@@ -2426,6 +2486,9 @@ func (q *Queries) SelectConversationMessageByProviderItem(ctx context.Context, a
 		&i.DeliveryContentJson,
 		&i.BranchID,
 		&i.ClientPayloadHash,
+		&i.SenderSessionID,
+		&i.SenderProjectID,
+		&i.SenderDisplayName,
 	)
 	return i, err
 }
@@ -2446,7 +2509,7 @@ WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     JOIN conversation_branches AS branch ON branch.id = path.branch_id
     WHERE branch.parent_branch_id IS NOT NULL
 )
-SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash FROM conversation_messages
+SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name FROM conversation_messages
 JOIN active_path AS path ON path.branch_id = conversation_messages.branch_id
 WHERE conversation_messages.conversation_id = ?1
   AND (path.max_sequence IS NULL OR conversation_messages.sequence <= path.max_sequence)
@@ -2500,6 +2563,9 @@ func (q *Queries) SelectConversationMessages(ctx context.Context, conversationID
 			&i.DeliveryContentJson,
 			&i.BranchID,
 			&i.ClientPayloadHash,
+			&i.SenderSessionID,
+			&i.SenderProjectID,
+			&i.SenderDisplayName,
 		); err != nil {
 			return nil, err
 		}
@@ -2530,7 +2596,7 @@ WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     JOIN conversation_branches AS branch ON branch.id = path.branch_id
     WHERE branch.parent_branch_id IS NOT NULL
 )
-SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash FROM conversation_messages
+SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name FROM conversation_messages
 JOIN active_path AS path ON path.branch_id = conversation_messages.branch_id
 WHERE conversation_messages.conversation_id = ?1
   AND conversation_messages.sequence < ?2
@@ -2580,6 +2646,9 @@ func (q *Queries) SelectConversationMessagesPage(ctx context.Context, arg Select
 			&i.DeliveryContentJson,
 			&i.BranchID,
 			&i.ClientPayloadHash,
+			&i.SenderSessionID,
+			&i.SenderProjectID,
+			&i.SenderDisplayName,
 		); err != nil {
 			return nil, err
 		}
@@ -3056,7 +3125,7 @@ func (q *Queries) SelectConversationTurnsPage(ctx context.Context, arg SelectCon
 }
 
 const selectConversationUserMessageByTurn = `-- name: SelectConversationUserMessageByTurn :one
-SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash
+SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name
 FROM conversation_messages
 JOIN conversation_turns ON conversation_turns.id = conversation_messages.turn_id
 WHERE conversation_messages.conversation_id = ?
@@ -3093,6 +3162,9 @@ func (q *Queries) SelectConversationUserMessageByTurn(ctx context.Context, arg S
 		&i.DeliveryContentJson,
 		&i.BranchID,
 		&i.ClientPayloadHash,
+		&i.SenderSessionID,
+		&i.SenderProjectID,
+		&i.SenderDisplayName,
 	)
 	return i, err
 }
@@ -3220,7 +3292,7 @@ func (q *Queries) SelectProjectConversation(ctx context.Context, projectID *doma
 }
 
 const selectQueuedConversationMessage = `-- name: SelectQueuedConversationMessage :one
-SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash
+SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name
 FROM conversation_messages
 JOIN conversation_turns ON conversation_turns.id = conversation_messages.turn_id
 WHERE conversation_messages.conversation_id = ?
@@ -3257,6 +3329,9 @@ func (q *Queries) SelectQueuedConversationMessage(ctx context.Context, arg Selec
 		&i.DeliveryContentJson,
 		&i.BranchID,
 		&i.ClientPayloadHash,
+		&i.SenderSessionID,
+		&i.SenderProjectID,
+		&i.SenderDisplayName,
 	)
 	return i, err
 }
@@ -3599,6 +3674,27 @@ type SettleOrphanedConversationTurnsParams struct {
 // completed.
 func (q *Queries) SettleOrphanedConversationTurns(ctx context.Context, arg SettleOrphanedConversationTurnsParams) error {
 	_, err := q.db.ExecContext(ctx, settleOrphanedConversationTurns, arg.CompletedAt, arg.HandledBySessionID)
+	return err
+}
+
+const settleOrphanedReviewTurns = `-- name: SettleOrphanedReviewTurns :exec
+UPDATE conversation_turns
+SET state = 'failed',
+    error_message = 'controller ended before the turn completed',
+    completed_at = ?1
+WHERE conversation_turns.conversation_id = ?2
+  AND conversation_turns.handled_by_review_id = ?3
+  AND conversation_turns.state IN ('queued', 'running')
+`
+
+type SettleOrphanedReviewTurnsParams struct {
+	CompletedAt    sql.NullTime
+	ConversationID string
+	ReviewID       sql.NullString
+}
+
+func (q *Queries) SettleOrphanedReviewTurns(ctx context.Context, arg SettleOrphanedReviewTurnsParams) error {
+	_, err := q.db.ExecContext(ctx, settleOrphanedReviewTurns, arg.CompletedAt, arg.ConversationID, arg.ReviewID)
 	return err
 }
 

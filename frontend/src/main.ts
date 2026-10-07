@@ -71,6 +71,7 @@ import { promisify } from "node:util";
 import { type DaemonLaunchSpec, bundledDaemonIdentityError, resolveDaemonLaunch } from "./shared/daemon-launch";
 import { createListenPortScanner, defaultRunFilePath, parseRunFile } from "./shared/daemon-discovery";
 import type { DaemonStatus } from "./shared/daemon-status";
+import { canonicalPathInside, sameCanonicalPath } from "./shared/path-identity";
 import {
 	refreshSlowDaemonStartupDetails,
 	slowDaemonStartupStatus,
@@ -933,9 +934,13 @@ function editorStateDir(): string {
 	return path.dirname(runFile);
 }
 
+// Tagged so the renderer reads these as "couldn't check" rather than "the worktree is gone".
+const workspaceCheckUnavailable = (message: string) =>
+	Object.assign(new Error(message), { code: "SERVICE_UNAVAILABLE" });
+
 async function resolveSessionWorkspaceForDesktop(sessionId: string): Promise<string> {
 	if (daemonStatus.state !== "ready" || !daemonStatus.port) {
-		throw new Error("AO daemon is not ready.");
+		throw workspaceCheckUnavailable("AO daemon is not ready.");
 	}
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), DAEMON_PROBE_TIMEOUT_MS);
@@ -943,11 +948,17 @@ async function resolveSessionWorkspaceForDesktop(sessionId: string): Promise<str
 		const response = await net.fetch(
 			`http://127.0.0.1:${daemonStatus.port}/api/v1/desktop/sessions/${encodeURIComponent(sessionId)}/workspace`,
 			{ signal: controller.signal },
-		);
-		const body = await response.json() as Record<string, unknown>;
+		).catch((error: unknown) => {
+			if (error instanceof Error && error.name === "AbortError") throw error;
+			throw workspaceCheckUnavailable("AO daemon is not reachable.");
+		});
+		const body = await response.json().catch((error: unknown) => {
+			if (response.status >= 500) throw workspaceCheckUnavailable("AO daemon is not ready.");
+			throw error;
+		}) as Record<string, unknown>;
 		if (!response.ok) {
 			const message = typeof body.message === "string" ? body.message : "Session workspace is not available.";
-			throw new Error(message);
+			throw Object.assign(new Error(message), typeof body.code === "string" ? { code: body.code } : {});
 		}
 		const workspacePath = body.workspacePath;
 		if (typeof workspacePath !== "string" || !path.isAbsolute(workspacePath)) {
@@ -956,7 +967,7 @@ async function resolveSessionWorkspaceForDesktop(sessionId: string): Promise<str
 		return workspacePath;
 	} catch (error) {
 		if (error instanceof Error && error.name === "AbortError") {
-			throw new Error("Timed out while resolving the session workspace.");
+			throw workspaceCheckUnavailable("Timed out while resolving the session workspace.");
 		}
 		throw error;
 	} finally {
@@ -1206,21 +1217,6 @@ function daemonEnv(forceKeep = keepDaemonAlive(process.env)): NodeJS.ProcessEnv 
 	);
 }
 
-function pathKey(value: string): string {
-	const resolved = path.resolve(value);
-	return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
-
-function samePath(a: string, b: string): boolean {
-	return pathKey(a) === pathKey(b);
-}
-
-function pathInside(child: string, parent: string): boolean {
-	const childKey = pathKey(child);
-	const parentKey = pathKey(parent);
-	return childKey === parentKey || childKey.startsWith(parentKey + path.sep);
-}
-
 function processAlive(pid: number): boolean {
 	if (!pid) return false;
 	try {
@@ -1247,11 +1243,11 @@ async function readDaemonProbe(port: number, endpoint: "healthz" | "readyz"): Pr
 
 function daemonIdentityError(launch: DaemonLaunchSpec, probe: DaemonProbe): string | null {
 	if (launch.source === "dev") {
-		const cwdMatches = probe.workingDirectory ? samePath(probe.workingDirectory, launch.cwd) : false;
+		const cwdMatches = probe.workingDirectory ? sameCanonicalPath(probe.workingDirectory, launch.cwd) : false;
 		const startupCwdMatches = probe.startupWorkingDirectory
-			? samePath(probe.startupWorkingDirectory, launch.cwd)
+			? sameCanonicalPath(probe.startupWorkingDirectory, launch.cwd)
 			: false;
-		const executableMatches = probe.executablePath ? pathInside(probe.executablePath, launch.cwd) : false;
+		const executableMatches = probe.executablePath ? canonicalPathInside(probe.executablePath, launch.cwd) : false;
 		if (!probe.workingDirectory && !probe.startupWorkingDirectory && !probe.executablePath) {
 			return "An older AO daemon is already running, but it does not report its checkout identity. Stop it and restart this app.";
 		}
@@ -1264,7 +1260,7 @@ function daemonIdentityError(launch: DaemonLaunchSpec, probe: DaemonProbe): stri
 	}
 
 	if (launch.source === "bundled") {
-		return bundledDaemonIdentityError(probe, launch.command, process.env.APPIMAGE, samePath);
+		return bundledDaemonIdentityError(probe, launch.command, process.env.APPIMAGE, sameCanonicalPath);
 	}
 	return null;
 }

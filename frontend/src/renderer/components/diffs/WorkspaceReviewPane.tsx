@@ -32,6 +32,7 @@ import { formatTimeTerse } from "../../lib/format-time";
 import { useAskInChat } from "../../lib/chat-context-bus";
 import { sessionUiKey } from "../../lib/hosts";
 import { AO_PIERRE_FILES_REVIEW_CSS, AO_PIERRE_SURFACE_CSS } from "./pierreTheme";
+import { ImageDiffView, isWorkspaceImagePath } from "../ImageDiffView";
 import { REVIEW_CONTEXT_LINES, diffContentVersion, endsAtLastHunk, hydratedCopy, patchIdentity, stableFileDiff } from "./trailingContext";
 import { SelectionAskButton } from "./SelectionAskButton";
 import { codeReference, useCodeSelection } from "./useCodeSelection";
@@ -782,10 +783,27 @@ export function WorkspaceReviewPane({
 					const serverDeferredReason = serverDeferredByPath.get(file.path);
 					const pending = pendingDiffPaths.has(file.path);
 					const unavailable = !file.binary && !deferred && !serverDeferredReason && !pending;
+					const image = file.binary && isWorkspaceImagePath(file.path);
 					return (
 					<div className="m-2 flex items-center gap-2 rounded-md border border-border bg-surface p-3" key={file.path}>
-						<FileCode2 aria-hidden="true" className="text-passive" />
-						<div className="min-w-0 flex-1"><p className="truncate text-xs">{file.path}</p><p className="text-caption text-muted-foreground">{file.binary ? t("files.binaryUnavailable") : deferred ? t("files.deferredDiff") : serverDeferredReason ? t("files.diffUnavailableReason", { reason: serverDeferredReason }) : pending ? t("files.loadingDiff") : t("files.diffUnavailable")}</p></div>
+						{image ? (
+							<div className="min-w-0 flex-1">
+								<p className="truncate text-xs">{file.path}</p>
+								<ImageDiffView
+									path={file.path}
+									sessionId={sessionId}
+									hostId={hostId}
+									split={split}
+									status={file.status}
+									version={data.workspaceVersion ?? ""}
+								/>
+							</div>
+						) : (
+							<>
+								<FileCode2 aria-hidden="true" className="text-passive" />
+								<div className="min-w-0 flex-1"><p className="truncate text-xs">{file.path}</p><p className="text-caption text-muted-foreground">{file.binary ? t("files.binaryUnavailable") : deferred ? t("files.deferredDiff") : serverDeferredReason ? t("files.diffUnavailableReason", { reason: serverDeferredReason }) : pending ? t("files.loadingDiff") : t("files.diffUnavailable")}</p></div>
+							</>
+						)}
 						{deferred ? <Button onClick={() => setLoadedDeferredPaths((current) => new Set(current).add(file.path))} size="sm" type="button" variant="outline">{t("files.loadDiff")}</Button> : null}
 						{unavailable ? <RetryButton onClick={retryAll} /> : null}
 						{onOpenFile ? <Button onClick={() => onOpenFile(file.path, { ...fileOpenContext, mode: "file" })} size="sm" type="button" variant="outline">{t("files.fileView")}</Button> : null}
