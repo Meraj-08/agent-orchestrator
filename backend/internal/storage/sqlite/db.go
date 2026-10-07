@@ -354,6 +354,9 @@ func migrate(db *sql.DB) error {
 	if err := prepareSessionReviewerAgentConfigMigration(db); err != nil {
 		return fmt.Errorf("prepare session reviewer agent-config migration: %w", err)
 	}
+	if err := repairRenumberedContinuationMigrationHistory(db); err != nil {
+		return fmt.Errorf("repair renumbered continuation migration history: %w", err)
+	}
 	// Builds can advance a database past a migration that is added or
 	// renumbered later (notably across fast-moving Nightly releases). Apply
 	// those embedded migrations instead of permanently wedging daemon startup
@@ -2229,4 +2232,49 @@ WHERE type = 'table' AND name = 'sessions'`,
 		return fmt.Errorf("schema repair: sessions harness constraint is missing DeepSeek Harness and did not match known pre-DeepSeek schema")
 	}
 	return nil
+}
+
+// repairRenumberedContinuationMigrationHistory preserves preview databases that
+// added continuation as 0177 before main assigned that number to review reruns.
+// Keep existing messages, record the column's canonical version, and release the
+// old version only when the review index still has its pre-0177 predicate.
+func repairRenumberedContinuationMigrationHistory(db *sql.DB) error {
+	var history, column int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`).Scan(&history); err != nil {
+		return err
+	}
+	if history == 0 {
+		return nil
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('conversation_messages') WHERE name = 'continuation'`).Scan(&column); err != nil {
+		return err
+	}
+	if column == 0 {
+		return nil
+	}
+	var applied int
+	if err := db.QueryRow(`SELECT COALESCE((SELECT is_applied FROM goose_db_version WHERE version_id = 190 ORDER BY id DESC LIMIT 1), 0)`).Scan(&applied); err != nil {
+		return err
+	}
+	if applied != 0 {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var indexSQL string
+	if err := tx.QueryRow(`SELECT COALESCE((SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_review_run_session_pr_sha_harness'), '')`).Scan(&indexSQL); err != nil {
+		return err
+	}
+	if strings.Contains(strings.ToLower(indexSQL), "verdict") {
+		if _, err := tx.Exec(`DELETE FROM goose_db_version WHERE version_id = 177`); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (190, 1)`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
