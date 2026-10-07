@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -393,7 +394,17 @@ func IsInternalReplayContent(content ChatContent) bool {
 
 // ChatUserMessage is one inbound request to the agent.
 type ChatUserMessage struct {
-	Text string
+	// InteractionAt preserves initial acceptance across transition outbox replay.
+	InteractionAt time.Time
+	Text          string
+	// SenderSessionID identifies the AO session that authored an automation steer.
+	// It is presentation metadata only and is never sent to the provider.
+	SenderSessionID string
+	// SenderProjectID and SenderDisplayName are resolved from SenderSessionID when
+	// the source session is available. They are persisted on steer activities so
+	// the renderer can show a stable label and safe AO session link.
+	SenderProjectID   string
+	SenderDisplayName string
 	// Content carries native images and resources for providers that negotiated
 	// them. Drivers must reject an unsupported block rather than silently discard
 	// context the user believed they sent.
@@ -421,7 +432,10 @@ type ChatUserMessage struct {
 // MessageDeliveryOptions describes facts about the message independent of the
 // mechanism AO uses to deliver it.
 type MessageDeliveryOptions struct {
-	AuthoredByUser bool
+	InteractionAt time.Time
+	// SenderSessionID is cooperative local identity, resolved from stored metadata.
+	SenderSessionID string
+	AuthoredByUser  bool
 }
 
 // ChatTurnSettings are the per-turn choices a provider accepts alongside the

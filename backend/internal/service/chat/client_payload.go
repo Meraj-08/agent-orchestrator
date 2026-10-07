@@ -20,12 +20,14 @@ func clientPayloadHash(msg ports.ChatUserMessage) (string, error) {
 		content = nil
 	}
 	payload, err := json.Marshal(struct {
-		Text           string
-		Content        []ports.ChatContent
-		Origin         domain.MessageOrigin
-		AuthoredByUser bool
-		Settings       ports.ChatTurnSettings
-	}{msg.Text, content, normalizeOrigin(msg.Origin), msg.AuthoredByUser, msg.Settings})
+		Text            string
+		Content         []ports.ChatContent
+		Origin          domain.MessageOrigin
+		SenderSessionID string `json:",omitempty"`
+		AuthoredByUser  bool
+		Continuation    bool `json:",omitempty"`
+		Settings        ports.ChatTurnSettings
+	}{msg.Text, content, normalizeOrigin(msg.Origin), msg.SenderSessionID, msg.AuthoredByUser, msg.Continuation, msg.Settings})
 	if err != nil {
 		return "", fmt.Errorf("encode client message payload: %w", err)
 	}
@@ -33,7 +35,7 @@ func clientPayloadHash(msg ports.ChatUserMessage) (string, error) {
 }
 
 func legacyMessageMatches(existing domain.ConversationMessage, msg ports.ChatUserMessage) bool {
-	if existing.Text != msg.Text || existing.Origin != normalizeOrigin(msg.Origin) {
+	if existing.Text != msg.Text || existing.Origin != normalizeOrigin(msg.Origin) || existing.Continuation != msg.Continuation {
 		return false
 	}
 	if len(msg.Content) == 0 {

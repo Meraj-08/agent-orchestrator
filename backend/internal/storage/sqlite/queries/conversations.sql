@@ -578,6 +578,29 @@ SET state = 'failed',
     completed_at = ?
 WHERE handled_by_session_id = ? AND state IN ('queued', 'running');
 
+-- Reviewer Chat has its own controller generation on review, separate from
+-- the worker session. Settle only turns owned by that review conversation.
+-- name: FailOrphanedReviewActivities :exec
+UPDATE conversation_activities
+SET status = 'failed', revision = revision + 1, updated_at = sqlc.arg(updated_at)
+WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
+  AND status = 'running'
+  AND conversation_activities.turn_id IN (
+      SELECT conversation_turns.id FROM conversation_turns
+      WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
+        AND conversation_turns.handled_by_review_id = sqlc.arg(review_id)
+        AND conversation_turns.state IN ('queued', 'running')
+  );
+
+-- name: SettleOrphanedReviewTurns :exec
+UPDATE conversation_turns
+SET state = 'failed',
+    error_message = 'controller ended before the turn completed',
+    completed_at = sqlc.arg(completed_at)
+WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
+  AND conversation_turns.handled_by_review_id = sqlc.arg(review_id)
+  AND conversation_turns.state IN ('queued', 'running');
+
 -- The running turns visible on the active branch, in the same order as the
 -- snapshot. Interrupt uses this exact projection when in-memory turn tracking
 -- has lost what the UI is showing; nested provider turns mean more than one row
@@ -962,8 +985,9 @@ WHERE id = ?
 INSERT INTO conversation_messages (
     id, conversation_id, turn_id, sequence, revision, role, origin,
     text, streaming, provider_item_id, client_message_id, client_payload_hash,
-    delivery_content_json, continuation, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    delivery_content_json, continuation, sender_session_id, sender_project_id, sender_display_name,
+    created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- Folding a streaming delta: append to the existing text and bump the revision
 -- so a client can detect a gap. The provider item id is the correlation key
@@ -1139,6 +1163,18 @@ WHERE conversation_activities.conversation_id = sqlc.arg(target_conversation_id)
     FROM conversation_turns
     WHERE conversation_turns.conversation_id = sqlc.arg(target_conversation_id)
       AND handled_by_session_id = sqlc.arg(handled_by_session_id)
+  );
+
+-- name: FailPendingReviewRequests :exec
+UPDATE conversation_activities
+SET status = 'failed', revision = revision + 1, updated_at = sqlc.arg(updated_at)
+WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
+  AND kind IN ('approval', 'user_input')
+  AND status = 'pending'
+  AND conversation_activities.turn_id IN (
+    SELECT conversation_turns.id FROM conversation_turns
+    WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
+      AND conversation_turns.handled_by_review_id = sqlc.arg(review_id)
   );
 
 -- Append streamed command output, capped in one statement.
