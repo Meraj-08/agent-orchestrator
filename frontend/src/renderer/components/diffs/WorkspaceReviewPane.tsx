@@ -327,6 +327,8 @@ export function WorkspaceReviewPane({
 	// session has a Chat composer; each file's header carries its item id.
 	const askInChat = useAskInChat(sessionId, hostId);
 	const codeSelection = useCodeSelection(reviewRef, (selection) => {
+		// Pierre portals the custom header into this host's light DOM; the selected
+		// code is in its shadow root. Search this host to keep the file lookup local.
 		const file = summaryById.get(selection.host.querySelector("[data-review-item-id]")?.getAttribute("data-review-item-id") ?? "");
 		if (file) askInChat?.(codeReference(file.path, selection, true));
 	}, askInChat !== undefined);

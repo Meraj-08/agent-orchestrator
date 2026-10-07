@@ -172,6 +172,12 @@ test.beforeEach(async ({ page }) => {
 test.describe("Ask in chat from highlighted code", () => {
 	test("review list: the button follows a drag, asks about lines 2–4, and the chip sends their code", async ({ page }) => {
 		const { composer, sentToChat } = await openChatSession(page);
+		// The review header is slotted from the selected surface's light DOM,
+		// so the file lookup must succeed on that same host (review regression).
+		await expect.poll(() => row(page, REVIEW, 2).evaluate((element) => {
+			const host = (element.getRootNode() as ShadowRoot).host;
+			return host.querySelector("[data-review-item-id]")?.getAttribute("data-review-item-id");
+		})).toContain(filePath);
 		await selectText(page, row(page, REVIEW, 2), row(page, REVIEW, 4), { release: false });
 		// Shown while the selection is still being dragged, letting the drag through.
 		await expect(askButton(page)).toBeVisible();
