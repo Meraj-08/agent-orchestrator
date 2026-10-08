@@ -135,19 +135,21 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"port":  {},
 	},
 	"ao.http.5xx": {
-		"component":     {},
-		"duration":      {},
-		"error_code":    {},
-		"error_kind":    {},
-		"fingerprint":   {},
-		"method":        {},
-		"operation":     {},
-		"path":          {},
-		"status":        {},
-		"status_family": {},
-		"count":         {},
-		"window_start":  {},
-		"window_end":    {},
+		"component":          {},
+		"duration":           {},
+		"error_code":         {},
+		"error_kind":         {},
+		"fingerprint":        {},
+		"method":             {},
+		"operation":          {},
+		"path":               {},
+		"status":             {},
+		"status_family":      {},
+		"browser_command":    {},
+		"runtime_link_state": {},
+		"count":              {},
+		"window_start":       {},
+		"window_end":         {},
 	},
 	"ao.onboarding.first_project_added": {
 		"has_git_remote": {},
@@ -163,6 +165,7 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 	"ao.review.triggered": {
 		"created_runs": {},
 		"harness":      {},
+		"rerun":        {},
 		"reused":       {},
 		"trigger":      {},
 	},
@@ -238,6 +241,8 @@ type PostHogSink struct {
 	ch         chan ports.TelemetryEvent
 	wg         sync.WaitGroup
 	closeOnce  sync.Once
+	queueMu    sync.RWMutex
+	closed     bool
 	// ctx bounds every in-flight send and its retry backoff. Close cancels it
 	// when the caller's shutdown context is done, so pending retry work stops
 	// promptly instead of outliving shutdown on an uncancellable sleep or a
@@ -282,16 +287,31 @@ func NewPostHogSink(dataDir, apiKey, host, appVersion, defaultAgent string, clie
 
 // Emit enqueues an event for best-effort export.
 func (s *PostHogSink) Emit(_ context.Context, ev ports.TelemetryEvent) {
+	s.queueMu.RLock()
+	if s.closed {
+		s.queueMu.RUnlock()
+		return
+	}
+	queued := false
 	select {
 	case s.ch <- ev:
+		queued = true
 	default:
+	}
+	s.queueMu.RUnlock()
+	if !queued {
 		s.log.Warn("telemetry posthog sink buffer full; dropping event", "name", ev.Name, "source", ev.Source)
 	}
 }
 
 // Close drains the exporter until completion or context cancellation.
 func (s *PostHogSink) Close(ctx context.Context) error {
-	s.closeOnce.Do(func() { close(s.ch) })
+	s.closeOnce.Do(func() {
+		s.queueMu.Lock()
+		s.closed = true
+		close(s.ch)
+		s.queueMu.Unlock()
+	})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -462,10 +482,13 @@ func (s *PostHogSink) properties(ev ports.TelemetryEvent) map[string]any {
 	// activity breakdowns stay complete.
 	if actor, ok := props["github_actor"]; ok && s.personProfileSet.CompareAndSwap(false, true) {
 		props["$set"] = map[string]any{"github_actor": actor}
+		props["$unset"] = stalePersonProperties
 		props["$process_person_profile"] = true
 	}
 	return props
 }
+
+var stalePersonProperties = []string{"ao_version", "app_version", "build_mode", "platform", "surface"}
 
 func remoteEventName(name string) string {
 	if alias, ok := remoteEventNameAliases[name]; ok {

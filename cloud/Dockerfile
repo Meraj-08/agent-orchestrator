@@ -4,7 +4,7 @@ ARG BUILDPLATFORM
 ARG TARGETOS=linux
 ARG TARGETARCH
 
-FROM --platform=${BUILDPLATFORM} golang:1.26.5-bookworm AS build
+FROM --platform=${BUILDPLATFORM} golang:1.27.1-bookworm AS build
 ARG TARGETOS
 ARG TARGETARCH
 WORKDIR /src
@@ -26,11 +26,43 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/ao ./cmd/ao-cloud-agent
 
+# Trixie has no fix for CVE-2026-77214 yet. Rebuild Debian's pinned Expat
+# 2.9.0 source on Trixie instead of mixing unstable runtime dependencies.
+# Remove this stage once Trixie's libexpat1 includes the upstream bounds check.
+FROM debian:trixie-slim AS expat-build
+WORKDIR /build
+RUN apt-get update && \
+    apt-get install --yes --no-install-recommends \
+        build-essential debhelper docbook-to-man fakeroot && \
+    rm -rf /var/lib/apt/lists/*
+ADD --checksum=sha256:b5ad165baca0f2f2ac2a02b6b4b66d68ee890f582df398da9f86399679ca9c29 \
+    https://deb.debian.org/debian/pool/main/e/expat/expat_2.9.0-1.dsc ./
+ADD --checksum=sha256:6e8ce7b52ebbaa423c59becc7cf1e6875c42e49228c062ac8123c10e700cec27 \
+    https://deb.debian.org/debian/pool/main/e/expat/expat_2.9.0.orig.tar.gz ./
+ADD --checksum=sha256:d23e632b05f10e269ee5426ff1ea962b4aec17fcd179c4dec14390a6793da764 \
+    https://deb.debian.org/debian/pool/main/e/expat/expat_2.9.0-1.debian.tar.xz ./
+COPY test/expat-buffer-bounds.c /build/
+RUN dpkg-source -x expat_2.9.0-1.dsc source && \
+    cd source && \
+    dpkg-buildpackage -b -us -uc -Pstage1,noudeb --jobs=2 && \
+    make -C build check && \
+    cd /build && \
+    dpkg -i libexpat1_2.9.0-1_*.deb libexpat1-dev_2.9.0-1_*.deb && \
+    mkdir /out && \
+    cp libexpat1_2.9.0-1_*.deb /out/libexpat1.deb && \
+    cc -Wall -Wextra -Werror expat-buffer-bounds.c -lexpat -o /out/expat-buffer-bounds && \
+    /out/expat-buffer-bounds
+
 FROM node:22-trixie-slim AS worker
 ARG TARGETARCH
 ARG CLAUDE_CODE_VERSION=2.1.228
 ARG CODEX_VERSION=0.147.0
 ARG CURSOR_AGENT_VERSION=2026.08.11-e8db854
+# OpenCode v2 ships as a NEW package, @opencode/cli (v1 was opencode-ai, whose
+# `latest` never crosses to v2). Pinned to the v2 major; AO's opencode adapter is
+# ported to v2 and gates a too-old binary loudly. Keep in lockstep with
+# coder/Sandbox.Dockerfile.
+ARG OPENCODE_VERSION=2
 ARG GH_VERSION=2.97.0
 RUN apt-get update && \
     apt-get upgrade --yes && \
@@ -54,9 +86,13 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/* && \
     npm install --global \
         "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
-        "@openai/codex@${CODEX_VERSION}" && \
+        "@agentclientprotocol/claude-agent-acp@0.70.0" \
+        "@openai/codex@${CODEX_VERSION}" \
+        "@opencode/cli@${OPENCODE_VERSION}" && \
     claude --version && \
+    test -x "$(command -v claude-agent-acp)" && \
     codex --version && \
+    opencode --version && \
     gh --version && \
     groupadd --gid 10001 ao-worker && \
     useradd --uid 10001 --gid ao-worker --home-dir /workspace/.ao/home --shell /bin/bash ao-worker && \
@@ -73,6 +109,10 @@ RUN case "${TARGETARCH}" in \
         | tar --strip-components=1 -xzf - -C "/opt/cursor-agent/${CURSOR_AGENT_VERSION}" && \
     ln -s "/opt/cursor-agent/${CURSOR_AGENT_VERSION}/cursor-agent" /usr/local/bin/cursor-agent && \
     cursor-agent --version
+RUN --mount=type=bind,from=expat-build,source=/out,target=/tmp/expat-fix \
+    dpkg -i /tmp/expat-fix/libexpat1.deb && \
+    /tmp/expat-fix/expat-buffer-bounds && \
+    test "$(dpkg-query -W -f='${Version}' libexpat1)" = 2.9.0-1
 COPY --from=build --chown=ao-worker:ao-worker /out/ao-worker /ao-worker
 COPY --from=build --chown=ao-worker:ao-worker /out/ao /usr/local/bin/ao
 USER ao-worker
