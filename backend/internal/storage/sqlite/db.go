@@ -1249,6 +1249,19 @@ func repairRenumberedChatMigrationHistory(db *sql.DB) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// Earlier dev builds used 0179-0181 for hibernation. Move that physical
+	// schema to 0190 so main's sender metadata, startup steps, and artifacts apply.
+	if _, err := tx.Exec(`
+UPDATE goose_db_version SET version_id = 190
+WHERE is_applied = 1
+  AND EXISTS (SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'hibernated_at')
+  AND ((version_id = 179 AND NOT EXISTS (SELECT 1 FROM pragma_table_info('conversation_messages') WHERE name = 'sender_session_id'))
+    OR (version_id = 180 AND NOT EXISTS (SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'provision_steps'))
+    OR (version_id = 181 AND NOT EXISTS (SELECT 1 FROM pragma_table_info('sessions') WHERE name IN ('artifact_dir', 'startup_cue_json'))))
+  AND NOT EXISTS (SELECT 1 FROM goose_db_version WHERE version_id = 190)`); err != nil {
+		return err
+	}
+
 	legacyApplied := false
 	for oldVersion := int64(52); oldVersion <= 65; oldVersion++ {
 		var applied int
@@ -2235,9 +2248,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 }
 
 // repairRenumberedContinuationMigrationHistory preserves preview databases that
-// added continuation as 0177 before main assigned that number to review reruns.
+// added continuation as 0177 or 0190 before main assigned those versions.
 // Keep existing messages, record the column's canonical version, and release the
-// old version only when the review index still has its pre-0177 predicate.
+// old versions only when their replacement schema has not been installed.
 func repairRenumberedContinuationMigrationHistory(db *sql.DB) error {
 	var history, column int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`).Scan(&history); err != nil {
@@ -2253,7 +2266,7 @@ func repairRenumberedContinuationMigrationHistory(db *sql.DB) error {
 		return nil
 	}
 	var applied int
-	if err := db.QueryRow(`SELECT COALESCE((SELECT is_applied FROM goose_db_version WHERE version_id = 190 ORDER BY id DESC LIMIT 1), 0)`).Scan(&applied); err != nil {
+	if err := db.QueryRow(`SELECT COALESCE((SELECT is_applied FROM goose_db_version WHERE version_id = 192 ORDER BY id DESC LIMIT 1), 0)`).Scan(&applied); err != nil {
 		return err
 	}
 	if applied != 0 {
@@ -2273,7 +2286,13 @@ func repairRenumberedContinuationMigrationHistory(db *sql.DB) error {
 			return err
 		}
 	}
-	if _, err := tx.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (190, 1)`); err != nil {
+	// A preview build used 0190 for continuation. Release that ledger entry
+	// only when main's physical hibernation schema has not been installed.
+	if _, err := tx.Exec(`DELETE FROM goose_db_version WHERE version_id = 190
+AND NOT EXISTS (SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'hibernated_at')`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (192, 1)`); err != nil {
 		return err
 	}
 	return tx.Commit()

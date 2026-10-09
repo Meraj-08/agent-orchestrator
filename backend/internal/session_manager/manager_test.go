@@ -57,10 +57,12 @@ type fakeStore struct {
 	getProjectErr                      error
 	getSessionErr                      error
 	updateSessionErr                   error
-	deletePrepErr                      error
+	hibernationCASConflicts            int
 	updateBrowserCapabilityVerifierErr error
-	createClientRequestErr             error
-	promoteTaskErr                     error
+	deletePrepErr                      error
+
+	createClientRequestErr error
+	promoteTaskErr         error
 	// agentSwitchStore is wired only by agent-switch tests so fakeLCM can model
 	// Lifecycle Manager's atomic ownership-boundary commands.
 	agentSwitchStore any
@@ -148,6 +150,22 @@ func (f *fakeStore) UpdateSession(_ context.Context, rec domain.SessionRecord) e
 	}
 	f.sessions[rec.ID] = rec
 	return nil
+}
+func (f *fakeStore) SetSessionHibernated(_ context.Context, id domain.SessionID, revision int64, at *time.Time) (bool, error) {
+	rec, ok := f.sessions[id]
+	if !ok || rec.Revision != revision || rec.IsTerminated {
+		return false, nil
+	}
+	if f.hibernationCASConflicts > 0 {
+		f.hibernationCASConflicts--
+		rec.Revision++
+		f.sessions[id] = rec
+		return false, nil
+	}
+	rec.HibernatedAt = at
+	rec.Revision++
+	f.sessions[id] = rec
+	return true, nil
 }
 func (f *fakeStore) UpdateSessionArtifactOutput(_ context.Context, id domain.SessionID, artifactDir string, outputType domain.SessionOutputType) (bool, error) {
 	if f.updateSessionErr != nil {
@@ -314,6 +332,19 @@ func (f *fakeStore) ListAllSessions(context.Context) ([]domain.SessionRecord, er
 		out = append(out, r)
 	}
 	return out, nil
+}
+func (f *fakeStore) ListChatHibernationCandidates(ctx context.Context) ([]domain.SessionID, error) {
+	records, err := f.ListAllSessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var ids []domain.SessionID
+	for _, rec := range records {
+		if rec.EligibleForChatHibernation() {
+			ids = append(ids, rec.ID)
+		}
+	}
+	return ids, nil
 }
 func (f *fakeStore) DeleteSession(_ context.Context, id domain.SessionID) (bool, error) {
 	if f.deleteErr != nil {
@@ -11020,6 +11051,57 @@ func TestSendRecordsInteractionOnlyForDirectTerminalSender(t *testing.T) {
 			}
 			if counter.calls != tc.want {
 				t.Fatalf("interaction writes=%d want=%d", counter.calls, tc.want)
+			}
+		})
+	}
+}
+
+func TestOrchestratorWorkspaceBranchCollision(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		kind         domain.SessionKind
+		explicit     bool
+		wantFallback bool
+	}{
+		{name: "generated orchestrator branch", kind: domain.KindOrchestrator, wantFallback: true},
+		{name: "explicit orchestrator branch", kind: domain.KindOrchestrator, explicit: true},
+		{name: "worker branch", kind: domain.KindWorker},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, _, repo := newGitTaskPreparationManager(t)
+			project := st.projects["mer"]
+			branch := "ao/mer-orchestrator"
+			occupied := filepath.Join(t.TempDir(), "occupied")
+			runManagerGit(t, repo, "worktree", "add", "-b", branch, occupied, "main")
+			runManagerGit(t, repo, "branch", branch+"-2", "main")
+			dirtyPath := filepath.Join(occupied, "README.md")
+			if err := os.WriteFile(dirtyPath, []byte("existing agent work\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cfg := ports.SpawnConfig{ProjectID: "mer", Kind: tc.kind}
+			if tc.explicit {
+				cfg.Branch = branch
+			}
+			ws, _, err := m.createSessionWorkspace(ctx, project, cfg, "mer-1", branch, nil)
+			if tc.wantFallback {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if ws.Branch != branch+"-3" || ws.Path == occupied {
+					t.Fatalf("new workspace = %+v", ws)
+				}
+				reused, _, err := m.createSessionWorkspace(ctx, project, cfg, "mer-2", branch, nil)
+				if err != nil || reused.Path != ws.Path || reused.Branch != ws.Branch {
+					t.Fatalf("reuse workspace = %+v, err = %v", reused, err)
+				}
+			} else if !errors.Is(err, ports.ErrWorkspaceBranchCheckedOutElsewhere) {
+				t.Fatalf("error = %v, want branch conflict", err)
+			}
+			if got := strings.TrimSpace(runManagerGit(t, occupied, "branch", "--show-current")); got != branch {
+				t.Fatalf("occupied branch changed to %q", got)
+			}
+			if content, err := os.ReadFile(dirtyPath); err != nil || string(content) != "existing agent work\n" {
+				t.Fatalf("existing work changed: %q, %v", content, err)
 			}
 		})
 	}

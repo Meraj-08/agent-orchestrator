@@ -221,3 +221,40 @@ func TestContinuationDeliveryRetrySurvivesControllerRestart(t *testing.T) {
 		t.Fatalf("restart retry lost its frozen context or marker: %#v", sent)
 	}
 }
+
+func TestContinuationDeliveryHibernatedQueuePreservesContextAndMarker(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	seedContinuationTask(t, h)
+	if err := h.svc.Stop(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	record, found, err := h.st.GetSession(ctx, testSession)
+	if err != nil || !found {
+		t.Fatalf("read session: %v, found=%v", err, found)
+	}
+	now := time.Now()
+	changed, err := h.st.SetSessionHibernated(ctx, testSession, record.Revision, &now)
+	if err != nil || !changed {
+		t.Fatalf("hibernate session: %v, changed=%v", err, changed)
+	}
+	request := continuationMessage("continue-hibernated")
+	if _, err := h.svc.QueueUserMessage(ctx, testSession, request); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := h.st.LoadConversationSnapshot(ctx, h.ctrl.ConversationID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	message := snapshot.Messages[len(snapshot.Messages)-1]
+	if !message.Continuation || !strings.Contains(message.Text, "TASK_DONE") || !strings.Contains(message.Text, "Keep the") {
+		t.Fatalf("queued continuation lost context or marker: %#v", message)
+	}
+	if duplicate, err := h.svc.QueueUserMessage(ctx, testSession, request); err != nil || duplicate.ID != "" {
+		t.Fatalf("duplicate continuation: %#v, %v", duplicate, err)
+	}
+	queued, err := h.st.NextQueuedTurn(ctx, h.ctrl.ConversationID())
+	if err != nil || queued.Text != message.Text {
+		t.Fatalf("durable continuation queue lost frozen context: %#v, %v", queued, err)
+	}
+}

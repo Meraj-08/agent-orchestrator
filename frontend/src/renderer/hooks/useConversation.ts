@@ -27,6 +27,7 @@ import { sessionUiKey } from "../lib/hosts";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
+import type { ChatDraftExcerptReference } from "../lib/chat-drafts";
 import type {
 	ActivityKind,
 	ApprovalMode,
@@ -61,11 +62,13 @@ type WireMessage = components["schemas"]["ConversationMessageResponse"];
 type WireActivity = components["schemas"]["ConversationActivityResponse"];
 type WireImageContent = components["schemas"]["ConversationImageContentRequest"];
 type WireResourceContent = components["schemas"]["ConversationResourceContentRequest"];
+type WireExcerptReference = components["schemas"]["ConversationExcerptReferenceRequest"];
 
 export interface ConversationSendInput {
 	text: string;
 	attachments?: WireImageContent[];
 	resources?: WireResourceContent[];
+	excerpts?: WireExcerptReference[];
 	/** Caller-owned durable idempotency key used for crash-safe retries. */
 	clientMessageId?: string;
 	/** The user's one-click "continue" after stopping a turn. */
@@ -129,6 +132,12 @@ export type ConversationLocalEcho = {
 	/** A continue after a stop, drawn as a marker while it is sent. */
 	continuation?: boolean;
 	createdAt: string;
+	/** A hibernated send is acknowledged locally while the provider wakes. */
+	backgroundWake?: boolean;
+	/** A turn was already active when this was sent, so it belongs in the queue dock, not the chat. */
+	queued?: boolean;
+	/** Excerpts are rendered inside the optimistic user message bubble. */
+	excerpts?: Pick<ChatDraftExcerptReference, "text" | "messageId" | "revision">[];
 	/** Filled after the daemon accepts the send, then used for exact reconciliation. */
 	turnId?: string;
 };
@@ -473,11 +482,25 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 
 	const send = useMutation({
 		onMutate: (variables: ConversationSendMutationInput) => {
+			const current = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(
+				conversationQueryKey(variables.targetSessionId, hostId),
+			);
+			const backgroundWake = current?.pages.some((page) => page.controller.state === "hibernated") ?? false;
+			const turnActive = current?.pages.some((page) =>
+				page.turns.some((turn) => turn.state === "running" || turn.state === "queued"),
+			) ?? false;
 			addConversationLocalEcho(queryClient, stateKey(variables.targetSessionId), {
 				clientMessageId: variables.clientMessageId,
 				text: variables.input.text,
 				continuation: variables.input.continuation,
+				excerpts: variables.input.excerpts?.map((excerpt) => ({
+					text: excerpt.text,
+					messageId: excerpt.messageId,
+					revision: excerpt.revision,
+				})),
 				createdAt: new Date().toISOString(),
+				backgroundWake,
+				queued: turnActive && !backgroundWake,
 			});
 			queryClient.setQueryData<ConversationDispatchTrackingBySession>(
 				conversationDispatchTrackingQueryKey,
@@ -962,6 +985,14 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		send: (input: string | ConversationSendInput) => {
 			if (!sessionId) return Promise.reject(new Error("No conversation session is selected."));
 			const clientMessageId = (typeof input === "string" ? undefined : input.clientMessageId) ?? crypto.randomUUID();
+			const normalizedInput: ConversationSendInput = typeof input === "string"
+				? { text: input }
+				: {
+					...input,
+					text: input.text.trim() || (input.excerpts?.length
+						? `Use the attached ${input.excerpts.length} chat excerpt(s) as context`
+						: input.text),
+				};
 			// React cannot disable the composer until its next render. Claim the
 			// session in the shared registry synchronously so two Enter events in the
 			// same tick cannot both cross the transport boundary.
@@ -972,7 +1003,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			return send.mutateAsync({
 				targetSessionId: sessionId,
 				clientMessageId,
-				input: typeof input === "string" ? { text: input } : input,
+				input: normalizedInput,
 			});
 		},
 		pendingAcceptedTurnId:
@@ -1660,6 +1691,9 @@ function toMessage(wire: WireMessage): ConversationMessage {
 			mimeType: item.mimeType || undefined,
 			uri: item.uri || undefined,
 			name: item.name || undefined,
+			text: item.text || undefined,
+			sourceMessageId: item.sourceMessageId || undefined,
+			sourceRevision: item.sourceRevision ?? undefined,
 		})),
 		editAvailable: wire.editAvailable ?? undefined,
 		continuation: wire.continuation || undefined,
@@ -1667,6 +1701,7 @@ function toMessage(wire: WireMessage): ConversationMessage {
 		senderSessionId: wire.senderSessionId,
 		senderProjectId: wire.senderProjectId,
 		senderDisplayName: wire.senderDisplayName,
+		clientMessageId: wire.clientMessageId,
 		createdAt: wire.createdAt,
 	};
 }

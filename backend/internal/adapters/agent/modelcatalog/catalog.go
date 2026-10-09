@@ -125,7 +125,7 @@ var commandSpecs = map[string]commandSpec{
 	"droid":       {args: []string{"exec", "--help"}, parser: parseDroidHelpModels},
 	"crush":       {args: []string{"models"}, parser: parseIDLines},
 	"fx":          {args: []string{"models", "--json"}, parser: parseFXModels},
-	"mimo-code":   {args: []string{"models"}, parser: parseIDLines},
+	"mimo-code":   {args: []string{"models"}, parser: parseMiMoModels},
 }
 
 // Base returns the picker behavior AO can provide without executing a CLI.
@@ -342,7 +342,9 @@ func discoverClaudeCatalog(
 		}
 		normalized := normalize(models)
 		if len(normalized) > 0 {
-			base.Models = applyClaudeConfiguredDefault(normalized, settings.Model)
+			// A configured alias ("sonnet") rides along with the provider's
+			// concrete models; label it with the version they resolve it to.
+			base.Models = LabelClaudeAliasVersions(applyClaudeConfiguredDefault(normalized, settings.Model), normalized)
 			base.Source = "provider"
 			return base, nil
 		}
@@ -440,6 +442,15 @@ func (d Discoverer) CatalogFingerprint(ctx context.Context, request ports.AgentM
 
 // Manual returns the manual-entry fallback catalog for an agent.
 func (Discoverer) Manual(agentID string) ports.AgentModelCatalog { return Manual(agentID) }
+
+// LabelAliases implements ports.AgentModelAliasLabeler. Only Claude Code
+// publishes family aliases whose version a provider catalog can resolve.
+func (Discoverer) LabelAliases(agentID string, models, reference []ports.AgentModelInfo) []ports.AgentModelInfo {
+	if agentID != "claude-code" {
+		return models
+	}
+	return LabelClaudeAliasVersions(models, reference)
+}
 
 // Discover executes model catalog discovery for an agent binary.
 func Discover(ctx context.Context, agentID, binary, workingDir string, env map[string]string) (ports.AgentModelCatalog, error) {
@@ -873,6 +884,19 @@ func parseIDLines(output []byte) ([]ports.AgentModelInfo, error) {
 			continue
 		}
 		id := strings.Trim(fields[0], "`\"'[](),:")
+		models = append(models, ports.AgentModelInfo{ID: id, Label: id})
+	}
+	return normalize(models), nil
+}
+
+func parseMiMoModels(output []byte) ([]ports.AgentModelInfo, error) {
+	text := ansiPattern.ReplaceAllString(string(output), "")
+	var models []ports.AgentModelInfo
+	for _, line := range strings.Split(text, "\n") {
+		id, _, found := strings.Cut(strings.TrimSpace(line), " — ")
+		if !found || !strings.Contains(id, "/") || !looksLikeModelID(id) {
+			continue
+		}
 		models = append(models, ports.AgentModelInfo{ID: id, Label: id})
 	}
 	return normalize(models), nil

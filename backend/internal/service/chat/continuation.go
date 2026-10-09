@@ -18,11 +18,15 @@ const continuationTextBudget = 8 * 1024
 // text makes queue recovery and failed-turn retries send the same context rather
 // than reconstructing it from a conversation that may have changed meanwhile.
 func (c *Controller) prepareContinuation(ctx context.Context, msg ports.ChatUserMessage) (ports.ChatUserMessage, error) {
-	if !msg.Continuation || c.continuationReader == nil {
+	return prepareContinuation(ctx, c.store, c.continuationReader, c.conversation.ID, msg)
+}
+
+func prepareContinuation(ctx context.Context, store Store, reader SnapshotReader, conversationID string, msg ports.ChatUserMessage) (ports.ChatUserMessage, error) {
+	if !msg.Continuation || reader == nil {
 		return msg, nil
 	}
 	if msg.ClientMessageID != "" {
-		_, found, err := c.store.ConversationMessageByClientID(ctx, c.conversation.ID, msg.ClientMessageID)
+		_, found, err := store.ConversationMessageByClientID(ctx, conversationID, msg.ClientMessageID)
 		if err != nil {
 			return msg, fmt.Errorf("read continuation delivery: %w", err)
 		}
@@ -32,7 +36,7 @@ func (c *Controller) prepareContinuation(ctx context.Context, msg ports.ChatUser
 			return msg, nil
 		}
 	}
-	rows, err := c.continuationReader.LoadConversationSnapshot(ctx, c.conversation.ID)
+	rows, err := reader.LoadConversationSnapshot(ctx, conversationID)
 	if err != nil {
 		return msg, fmt.Errorf("read interrupted conversation: %w", err)
 	}

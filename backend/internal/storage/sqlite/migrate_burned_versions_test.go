@@ -192,7 +192,9 @@ var shippedMigrations = map[int64]string{
 	// owns automatic workspace initialization.
 	188: "0188_remove_worktree_startup_cues.sql",
 	189: "0189_session_interaction.sql",
-	190: "0190_conversation_message_continuation.sql",
+	190: "0190_session_hibernation.sql",
+	191: "0191_session_branch_state.sql",
+	192: "0192_conversation_message_continuation.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

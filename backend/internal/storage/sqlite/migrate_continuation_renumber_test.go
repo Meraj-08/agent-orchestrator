@@ -7,10 +7,17 @@ import (
 )
 
 func TestMigrateRecognizesRenumberedContinuation(t *testing.T) {
-	for _, version := range []int64{176, 189} {
+	for _, version := range []int64{176, 189, 190} {
 		t.Run(strconv.FormatInt(version, 10), func(t *testing.T) {
-			db := openMigratedDatabaseCopyNoForeignKeys(t, version)
+			baseVersion := version
+			if version == 190 {
+				baseVersion = 189
+			}
+			db := openMigratedDatabaseCopyNoForeignKeys(t, baseVersion)
 			mustExec(t, db, `ALTER TABLE conversation_messages ADD COLUMN continuation INTEGER NOT NULL DEFAULT 0 CHECK (continuation IN (0, 1))`)
+			if version == 190 {
+				mustExec(t, db, `INSERT INTO goose_db_version (version_id, is_applied) VALUES (190, 1)`)
+			}
 			if version == 176 {
 				mustExec(t, db, `INSERT INTO goose_db_version (version_id, is_applied) VALUES (177, 1)`)
 			}
@@ -36,8 +43,15 @@ func TestMigrateRecognizesRenumberedContinuation(t *testing.T) {
 				t.Fatal("main's review rerun migration was skipped")
 			}
 			var count int
-			if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = 190 AND is_applied = 1`).Scan(&count); err != nil {
+			if err := db.QueryRow(`SELECT COUNT(*) FROM goose_db_version WHERE version_id = 192 AND is_applied = 1`).Scan(&count); err != nil {
 				t.Fatal(err)
+			}
+			var hibernationColumn int
+			if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'hibernated_at'`).Scan(&hibernationColumn); err != nil {
+				t.Fatal(err)
+			}
+			if hibernationColumn != 1 {
+				t.Fatal("main's hibernation migration was skipped")
 			}
 			if count != 1 {
 				t.Fatalf("canonical migration entries = %d, want 1", count)
