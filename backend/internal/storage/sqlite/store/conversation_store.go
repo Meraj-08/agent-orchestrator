@@ -3724,6 +3724,7 @@ func (s *Store) RetryPrompt(ctx context.Context, conversationID, turnID string) 
 		return domain.RetryPrompt{}, err
 	}
 	return domain.RetryPrompt{
+		Continuation:        row.Continuation != 0,
 		Text:                row.Text,
 		Origin:              row.Origin,
 		DeliveryContentJSON: row.DeliveryContentJson,

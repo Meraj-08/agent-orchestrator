@@ -193,9 +193,9 @@ const CHAT_FONT_SIZE_DEFAULT = 14;
 const WHEEL_ZOOM_THRESHOLD = 80;
 const WHEEL_ZOOM_RESET_MS = 250;
 
-// Sent as the user's own message when they continue a stopped turn, like play
-// after pause. The agent keeps the stopped turn's partial work in its context,
-// so a plain instruction is enough to carry on.
+// The daemon enriches this request with the interrupted task and response tail.
+// Continue starts another turn in the existing conversation; it is not an exact
+// execution checkpoint.
 export const CONTINUE_STOPPED_TURN_PROMPT = "Continue from where you stopped.";
 
 /** The latest turn that still counts is one the user stopped. */

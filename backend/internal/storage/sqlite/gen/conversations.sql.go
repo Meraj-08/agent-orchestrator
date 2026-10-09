@@ -3445,6 +3445,7 @@ WITH RECURSIVE active_path(branch_id, max_sequence) AS (
 )
 SELECT conversation_messages.text,
        conversation_messages.origin,
+       conversation_messages.continuation,
        conversation_messages.delivery_content_json,
        EXISTS (
            SELECT 1
@@ -3470,6 +3471,7 @@ type SelectRetryableConversationPromptParams struct {
 type SelectRetryableConversationPromptRow struct {
 	Text                string
 	Origin              domain.MessageOrigin
+	Continuation        int64
 	DeliveryContentJson string
 	ActiveLineage       bool
 }
@@ -3483,6 +3485,7 @@ func (q *Queries) SelectRetryableConversationPrompt(ctx context.Context, arg Sel
 	err := row.Scan(
 		&i.Text,
 		&i.Origin,
+		&i.Continuation,
 		&i.DeliveryContentJson,
 		&i.ActiveLineage,
 	)

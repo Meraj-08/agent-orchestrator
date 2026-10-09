@@ -200,6 +200,7 @@ type Controller struct {
 
 	conv                   ports.ChatConversation
 	store                  Store
+	continuationReader     SnapshotReader
 	activity               ActivityRecorder
 	log                    *slog.Logger
 	newID                  IDFactory
@@ -1390,6 +1391,13 @@ func (c *Controller) sendLocked(
 		return domain.ConversationTurn{}, ErrControllerHandoff
 	}
 
+	// Bind retries to the client request before adding durable continuation context.
+	var err error
+	msg, err = c.prepareContinuation(ctx, msg)
+	if err != nil {
+		return domain.ConversationTurn{}, err
+	}
+
 	now := c.now()
 	turnID := c.newID()
 	deliveryContent := ""
@@ -1415,10 +1423,7 @@ func (c *Controller) sendLocked(
 		InteractionAt:       msg.InteractionAt,
 	}
 
-	var (
-		created bool
-		err     error
-	)
+	var created bool
 	if c.reviewID == "" {
 		created, err = c.store.AppendUserMessage(ctx, c.conversation.ID, c.sessionID, c.generation, record, turnID, now)
 	} else {
@@ -1531,6 +1536,7 @@ func (c *Controller) RetryTurn(ctx context.Context, turnID string) (domain.Conve
 		Origin:              prompt.Origin,
 		ClientMessageID:     key,
 		DeliveryContentJSON: prompt.DeliveryContentJSON,
+		Continuation:        prompt.Continuation,
 	}
 	var created bool
 	if c.reviewID == "" {
@@ -1554,6 +1560,7 @@ func (c *Controller) RetryTurn(ctx context.Context, turnID string) (domain.Conve
 
 	return c.dispatch(ctx, newTurnID, ports.ChatUserMessage{
 		Text:            prompt.Text,
+		Continuation:    prompt.Continuation,
 		Content:         content,
 		Origin:          prompt.Origin,
 		ClientMessageID: key,

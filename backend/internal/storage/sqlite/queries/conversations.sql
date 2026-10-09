@@ -1409,6 +1409,7 @@ WITH RECURSIVE active_path(branch_id, max_sequence) AS (
 )
 SELECT conversation_messages.text,
        conversation_messages.origin,
+       conversation_messages.continuation,
        conversation_messages.delivery_content_json,
        EXISTS (
            SELECT 1

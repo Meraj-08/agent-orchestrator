@@ -616,6 +616,7 @@ type QueuedTurn struct {
 // be dispatched again. Unlike QueuedTurn, its source was already sent and
 // settled; ActiveLineage says whether it still belongs to the visible branch.
 type RetryPrompt struct {
+	Continuation        bool
 	Text                string
 	Origin              MessageOrigin
 	DeliveryContentJSON string
