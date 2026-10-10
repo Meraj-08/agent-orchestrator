@@ -4136,3 +4136,15 @@ func (s *Store) SettleReviewChatWork(ctx context.Context, reviewID string, now t
 		return err
 	})
 }
+
+// ContinuationPrompt reads only the stopped turn's human request in the active lineage.
+func (s *Store) ContinuationPrompt(ctx context.Context, conversationID, turnID string) (domain.ConversationMessage, error) {
+	row, err := s.qr.SelectContinuationConversationPrompt(ctx, gen.SelectContinuationConversationPromptParams{ID: turnID, ConversationID: conversationID})
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.ConversationMessage{}, domain.ErrNoConversationTurn
+	}
+	if err != nil {
+		return domain.ConversationMessage{}, err
+	}
+	return messageToDomain(row), nil
+}

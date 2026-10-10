@@ -1758,6 +1758,73 @@ func (q *Queries) SelectCompletedEditReplacement(ctx context.Context, arg Select
 	return i, err
 }
 
+const selectContinuationConversationPrompt = `-- name: SelectContinuationConversationPrompt :one
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.id = ?2
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name, conversation_messages.continuation
+FROM conversation_messages
+JOIN conversation_turns ON conversation_turns.id = conversation_messages.turn_id
+WHERE conversation_turns.id = ?1
+  AND conversation_turns.conversation_id = ?2
+  AND conversation_turns.state = 'interrupted'
+  AND conversation_turns.rolled_back_at IS NULL
+  AND conversation_messages.role = 'user'
+  AND EXISTS (
+      SELECT 1 FROM active_path AS path
+      WHERE path.branch_id = conversation_messages.branch_id
+        AND (path.max_sequence IS NULL OR conversation_messages.sequence <= path.max_sequence)
+  )
+LIMIT 1
+`
+
+type SelectContinuationConversationPromptParams struct {
+	ID             string
+	ConversationID string
+}
+
+// A stopped prompt can precede hundreds of tool activities. Recover that one
+// visible request without reading tool output or scanning the conversation.
+func (q *Queries) SelectContinuationConversationPrompt(ctx context.Context, arg SelectContinuationConversationPromptParams) (ConversationMessage, error) {
+	row := q.db.QueryRowContext(ctx, selectContinuationConversationPrompt, arg.ID, arg.ConversationID)
+	var i ConversationMessage
+	err := row.Scan(
+		&i.ID,
+		&i.ConversationID,
+		&i.TurnID,
+		&i.Sequence,
+		&i.Revision,
+		&i.Role,
+		&i.Origin,
+		&i.Text,
+		&i.Streaming,
+		&i.ProviderItemID,
+		&i.ClientMessageID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeliveryContentJson,
+		&i.BranchID,
+		&i.ClientPayloadHash,
+		&i.SenderSessionID,
+		&i.SenderProjectID,
+		&i.SenderDisplayName,
+		&i.Continuation,
+	)
+	return i, err
+}
+
 const selectConversationActivities = `-- name: SelectConversationActivities :many
 WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
@@ -3152,18 +3219,41 @@ WHERE conversation_turns.conversation_id = ?1
   ))
   AND (
     conversation_turns.state IN ('queued', 'running')
+    -- Keep the authoritative latest relevant turn at the live edge even if
+    -- swept queued messages have crowded its prompt out of the bounded page.
+    OR (
+      ?2 > (SELECT live.latest_sequence FROM conversations AS live WHERE live.id = ?1)
+      AND conversation_turns.id = (
+        SELECT latest.id FROM conversation_turns AS latest
+        JOIN active_path AS latest_path ON latest_path.branch_id = latest.branch_id
+        WHERE latest.conversation_id = ?1
+          AND latest.promoted_to_turn_id IS NULL
+          AND latest.rolled_back_at IS NULL
+          AND latest.state <> 'cancelled'
+          AND (latest.state <> 'interrupted' OR latest.started_at IS NOT NULL OR latest.provider_turn_id <> '')
+          AND (latest_path.max_sequence IS NULL OR EXISTS (
+            SELECT 1 FROM conversation_messages AS lineage_message
+            WHERE lineage_message.turn_id = latest.id AND lineage_message.sequence <= latest_path.max_sequence
+            UNION ALL
+            SELECT 1 FROM conversation_activities AS lineage_activity
+            WHERE lineage_activity.turn_id = latest.id AND lineage_activity.sequence <= latest_path.max_sequence
+          ))
+        ORDER BY latest.requested_at DESC, latest.rowid DESC
+        LIMIT 1
+      )
+    )
     OR conversation_turns.id IN (
       SELECT turn_id FROM conversation_messages
       WHERE conversation_messages.conversation_id = ?1
         AND turn_id IS NOT NULL
-        AND conversation_messages.sequence >= ?2
-        AND conversation_messages.sequence < ?3
+        AND conversation_messages.sequence >= ?3
+        AND conversation_messages.sequence < ?2
       UNION
       SELECT turn_id FROM conversation_activities
       WHERE conversation_activities.conversation_id = ?1
         AND turn_id IS NOT NULL
-        AND conversation_activities.sequence >= ?2
-        AND conversation_activities.sequence < ?3
+        AND conversation_activities.sequence >= ?3
+        AND conversation_activities.sequence < ?2
     )
   )
 ORDER BY conversation_turns.requested_at, conversation_turns.rowid
@@ -3171,14 +3261,14 @@ ORDER BY conversation_turns.requested_at, conversation_turns.rowid
 
 type SelectConversationTurnsPageParams struct {
 	ConversationID string
-	OldestSequence int64
 	BeforeSequence int64
+	OldestSequence int64
 }
 
 // Turns represented by one bounded timeline page. Active turns are included
 // even before their first item arrives, so the live-turn controls never vanish.
 func (q *Queries) SelectConversationTurnsPage(ctx context.Context, arg SelectConversationTurnsPageParams) ([]ConversationTurn, error) {
-	rows, err := q.db.QueryContext(ctx, selectConversationTurnsPage, arg.ConversationID, arg.OldestSequence, arg.BeforeSequence)
+	rows, err := q.db.QueryContext(ctx, selectConversationTurnsPage, arg.ConversationID, arg.BeforeSequence, arg.OldestSequence)
 	if err != nil {
 		return nil, err
 	}

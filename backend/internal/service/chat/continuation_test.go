@@ -164,3 +164,117 @@ func TestStoppedContinuationContextBoundsAttachmentMetadata(t *testing.T) {
 		t.Fatalf("attachment metadata made the reminder invalid or oversized: %d bytes", len(reminder))
 	}
 }
+
+func TestContinuableTurnIDSurvivesProviderScopeChange(t *testing.T) {
+	rows := continuationRows()
+	started := time.Now()
+	rows.Turns[1].StartedAt, rows.Turns[1].ProviderTurnID = &started, ""
+	if ContinuableTurnID(rows.Turns) != "task" || !strings.Contains(stoppedContinuationContext(rows), "TASK_DONE") {
+		t.Fatal("provider scope change lost the dispatched stopped task")
+	}
+	rows.Turns[1].State = domain.TurnStateCompleted
+	rows.Turns = append(rows.Turns, domain.ConversationTurn{ID: "swept", State: domain.TurnStateInterrupted})
+	if ContinuableTurnID(rows.Turns) != "" || stoppedContinuationContext(rows) != "" {
+		t.Fatal("a swept queue resurrected completed work")
+	}
+}
+
+func TestStoppedContinuationContextPreservesVerifiedExcerpt(t *testing.T) {
+	rows := continuationRows()
+	rows.Messages[2].Text = "Fix this"
+	rows.Messages[2].DeliveryContentJSON = `[{"type":"excerpt","excerpt":{"selectedText":"SELECTED_CODE","userMessage":"PAIRED_REQUEST","assistantMessage":"PAIRED_RESPONSE"}}]`
+	reminder := stoppedContinuationContext(rows)
+	for _, want := range []string{"SELECTED_CODE", "PAIRED_REQUEST", "PAIRED_RESPONSE"} {
+		if !strings.Contains(reminder, want) {
+			t.Fatalf("missing excerpt context %q", want)
+		}
+	}
+}
+
+func TestPrepareContinuationUsesBoundedPageAndKeepsVisibleText(t *testing.T) {
+	fullRead := false
+	pages := 0
+	controller := Controller{
+		continuationReader: SnapshotReaderFunc(func(context.Context, string) (ConversationRows, error) {
+			fullRead = true
+			return ConversationRows{}, errors.New("full read forbidden")
+		}),
+		continuationPageReader: SnapshotPageReaderFunc(func(_ context.Context, _ string, before, limit int64) (ConversationRows, error) {
+			pages++
+			if before != 0 || limit != 128 {
+				t.Fatalf("unbounded page: %d/%d", before, limit)
+			}
+			return continuationRows(), nil
+		}),
+	}
+	request := ports.ChatUserMessage{Text: "Continue from where you stopped.", Continuation: true}
+	got, err := controller.prepareContinuation(context.Background(), request)
+	if err != nil || fullRead || pages != 1 || got.Text != request.Text || len(got.Content) != 1 || !got.Content[0].Internal {
+		t.Fatalf("provider context leaked or full history loaded: %#v, %v", got, err)
+	}
+	delivered := excerptDeliveryMessage(got)
+	if len(delivered.Content) != 0 || !strings.Contains(delivered.Text, "TASK_DONE") {
+		t.Fatal("text-only provider lost context")
+	}
+}
+
+func TestPrepareContinuationBoundsMissingHistoryReads(t *testing.T) {
+	pages := 0
+	controller := Controller{continuationPageReader: SnapshotPageReaderFunc(func(context.Context, string, int64, int64) (ConversationRows, error) {
+		pages++
+		rows := continuationRows()
+		rows.Messages = nil
+		rows.HasMoreBefore, rows.OldestSequence = true, int64(1000-pages*128)
+		return rows, nil
+	})}
+	if _, err := controller.prepareContinuation(context.Background(), ports.ChatUserMessage{Text: "Continue", Continuation: true}); err == nil || pages != 1 {
+		t.Fatalf("unbounded or silently context-free continuation: pages=%d err=%v", pages, err)
+	}
+}
+
+func TestStoppedContinuationContextCarriesOriginalOutsidePage(t *testing.T) {
+	rows := continuationRows()
+	reminder := stoppedContinuationContext(rows)
+	content, _ := json.Marshal([]ports.ChatContent{{Type: "text", Internal: true, Text: reminder}})
+	rows.Turns = []domain.ConversationTurn{{ID: "continued", State: domain.TurnStateInterrupted, ProviderTurnID: "p-continued"}}
+	rows.Messages = []domain.ConversationMessage{
+		{ID: "continued-user", TurnID: "continued", Sequence: 5, Role: domain.MessageRoleUser, Text: "Continue", Continuation: true, DeliveryContentJSON: string(content)},
+		{ID: "continued-answer", TurnID: "continued", Sequence: 6, Role: domain.MessageRoleAssistant, Text: "NEWEST_TAIL"},
+	}
+	got := stoppedContinuationContext(rows)
+	for _, want := range []string{"TASK_DONE", "Keep the", "NEWEST_TAIL"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("lost carried context %q: %s", want, got)
+		}
+	}
+	if strings.Count(got, "Interrupted task context (JSON):") != 1 {
+		t.Fatal("nested context")
+	}
+}
+
+func TestContinuationNativeReplayMatchesDispatchedPromptWithOpaqueIDs(t *testing.T) {
+	content, _ := json.Marshal([]ports.ChatContent{{Type: "text", Internal: true, Text: "FROZEN_TASK_CONTEXT"}})
+	message := domain.ConversationMessage{ID: "continue-user", TurnID: "ao-turn", Role: domain.MessageRoleUser, Continuation: true, Text: "Continue from where you stopped.", DeliveryContentJSON: string(content)}
+	index := indexNativeHistoryTurns([]domain.ConversationTurn{{ID: "ao-turn", ProviderTurnID: "old-opaque", State: domain.TurnStateCompleted}}, []domain.ConversationMessage{message}, nil)
+	text := "Continue from where you stopped.\n\nFROZEN_TASK_CONTEXT"
+	mapped, _ := index.mapReplay([]ports.ChatEvent{{Kind: ports.ChatEventUserMessageCompleted, ProviderTurnID: "new-opaque", Text: text}})
+	if mapped["new-opaque"] == nil || mapped["new-opaque"].providerTurnID != "old-opaque" {
+		t.Fatal("native replay duplicated the continued turn")
+	}
+	if mapped["new-opaque"].messages[nativeHistoryMessageFingerprint(domain.MessageRoleUser, text)] != 1 {
+		t.Fatal("inherited replay compared visible text instead of dispatched text")
+	}
+	if message.Text != "Continue from where you stopped." {
+		t.Fatal("provider matching leaked context into visible text")
+	}
+}
+
+func TestPrepareContinuationRejectsStaleIntent(t *testing.T) {
+	rows := continuationRows()
+	rows.Turns[1].State = domain.TurnStateCompleted
+	controller := Controller{continuationReader: SnapshotReaderFunc(func(context.Context, string) (ConversationRows, error) { return rows, nil })}
+	got, err := controller.prepareContinuation(context.Background(), ports.ChatUserMessage{Text: "Continue", Continuation: true})
+	if !errors.Is(err, ErrContinuationUnavailable) || len(got.Content) != 0 {
+		t.Fatalf("stale intent started context-free work: %#v, %v", got, err)
+	}
+}

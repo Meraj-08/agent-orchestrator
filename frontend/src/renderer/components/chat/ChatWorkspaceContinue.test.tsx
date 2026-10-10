@@ -47,6 +47,22 @@ describe("ChatWorkspace continue", () => {
 		expect(onSend).not.toHaveBeenCalled();
 	});
 
+	it("uses daemon eligibility instead of a swept queued turn", () => {
+		const snapshot = stoppedSnapshot();
+		snapshot.continueTurnId = "";
+		snapshot.turns.push({ id: "swept", state: "interrupted", requestedAt: snapshot.turns[0]!.requestedAt });
+		render(<ChatWorkspace snapshot={snapshot} onContinueTurn={vi.fn()} />);
+		expect(continueButton()).toBeNull();
+	});
+
+	it("keeps daemon-selected Continue after a provider switch clears provider ids", () => {
+		const snapshot = stoppedSnapshot();
+		snapshot.continueTurnId = "turn-2";
+		snapshot.turns = snapshot.turns.map((turn) => ({ ...turn, providerTurnId: undefined }));
+		render(<ChatWorkspace snapshot={snapshot} onContinueTurn={vi.fn()} />);
+		expect(continueButton()).toBeInTheDocument();
+	});
+
 	it("shows a continue as a Continued marker, not as a message the user wrote", () => {
 		const snapshot = stoppedSnapshot();
 		const stopped = snapshot.turns.find((turn) => turn.id === "turn-2")!;

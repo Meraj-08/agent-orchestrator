@@ -14,6 +14,7 @@ type TurnState = "running" | "interrupted" | "continued";
 function snapshot(state: TurnState) {
 	return {
 		conversationId: "conversation-chat-continue",
+		continueTurnId: state === "interrupted" ? "turn-long" : "",
 		sessionId,
 		harness: "codex",
 		mode: "chat",

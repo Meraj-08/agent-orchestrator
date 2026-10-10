@@ -66,9 +66,16 @@ type Service struct {
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation)
 	// onModelChanged syncs ChatUI's model override (including clearing it) to
 	// session metadata before the next prompt routes or a later TUI rebuild.
-	onModelChanged     func(domain.SessionID, string)
-	stopProviderHost   func(context.Context, domain.SessionID) error
-	reports            *reportsvc.Coordinator
+	onModelChanged   func(domain.SessionID, string)
+	stopProviderHost func(context.Context, domain.SessionID) error
+	reports          *reportsvc.Coordinator
+	renders          RenderFiles
+	dataDir          string
+	reconcileOutput  func(context.Context, domain.SessionID) error
+	renderCheck      RenderCheck
+	renderMeasure    RenderMeasure
+	// renderMeasures tracks background measures, so tests can wait for them.
+	renderMeasures     sync.WaitGroup
 	wakeChat           func(context.Context, domain.SessionID) error
 	hibernationEnabled func() bool
 	viewMu             sync.Mutex
@@ -146,6 +153,14 @@ type Options struct {
 	// StopProviderHost destroys current ownership on explicit teardown or failed hibernation,
 	// even if its daemon attachment already failed. Never used by StopAll.
 	StopProviderHost func(context.Context, domain.SessionID) error
+	// Renders stores agent HTML renders. Nil refuses PublishRender.
+	Renders RenderFiles
+	// DataDir locates a session's artifact directory when its record names
+	// none, for a render kept as an artifact.
+	DataDir string
+	// ReconcileOutputType updates a session's output type at once after a
+	// render is kept as an artifact. Nil leaves it to the artifact observer.
+	ReconcileOutputType func(context.Context, domain.SessionID) error
 	// HibernationEnabled reads the daemon-owned feature gate. Nil is disabled.
 	HibernationEnabled func() bool
 }
@@ -174,6 +189,9 @@ func New(opts Options) *Service {
 		onCodexCapacityChanged: opts.OnCodexCapacityChanged,
 		onModelChanged:         opts.OnModelChanged,
 		stopProviderHost:       opts.StopProviderHost,
+		renders:                opts.Renders,
+		dataDir:                opts.DataDir,
+		reconcileOutput:        opts.ReconcileOutputType,
 		hibernationEnabled:     opts.HibernationEnabled,
 		controllers:            make(map[domain.SessionID]*Controller),
 		ownerControllers:       make(map[domain.ConversationOwner]*Controller),
@@ -849,6 +867,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	controller := newController(
 		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged)
 	controller.continuationReader = s.reader
+	controller.continuationPageReader = s.pageReader
 	var commitProviderHistory func(context.Context) error
 	if liveReconnect {
 		providerTurnID := controller.restoreLiveTurnOwnership(liveRows.Turns)
@@ -1336,11 +1355,7 @@ func truncateExcerptContext(text string) string {
 	if len(text) <= maxExcerptPairedTextBytes {
 		return text
 	}
-	cut := maxExcerptPairedTextBytes
-	for cut > 0 && !utf8.RuneStart(text[cut]) {
-		cut--
-	}
-	return text[:cut] + "\n[truncated]"
+	return truncateUTF8Head(text, maxExcerptPairedTextBytes) + "\n[truncated]"
 }
 
 // Resolve answers a pending approval.
@@ -2488,4 +2503,15 @@ func openCodeApprovalTier(value string) (domain.PermissionMode, string, bool) {
 	default:
 		return "", "", false
 	}
+}
+
+func truncateUTF8Head(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+	end := limit
+	for end > 0 && !utf8.RuneStart(text[end]) {
+		end--
+	}
+	return text[:end]
 }

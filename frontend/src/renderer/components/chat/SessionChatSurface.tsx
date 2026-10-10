@@ -50,7 +50,7 @@ import type { TerminalTarget } from "../../types/terminal";
 import type { AgentSwitchSummary, WorkspaceSession } from "../../types/workspace";
 import { AgentSwitchProgressTrack } from "../AgentSwitchProgressTrack";
 import { useUiStore } from "../../stores/ui-store";
-import { CONTINUE_STOPPED_TURN_PROMPT, ChatWorkspace } from "./ChatWorkspace";
+import { CONTINUE_STOPPED_TURN_PROMPT, ChatWorkspace, continuableTurnId } from "./ChatWorkspace";
 import { startingConversationSnapshot } from "./OrchestratorStartingChat";
 import { hasProviderPermissionMode } from "./TurnSettingsBar";
 
@@ -131,6 +131,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	agentResuming,
 	controllerResumeError,
 	newWorkDisabled,
+	arriving,
 	onConversationWorkChange,
 }: {
 	session: WorkspaceSession;
@@ -183,6 +184,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	controllerResumeError?: string;
 	/** An interface handoff fences new agent work while current-turn decisions remain available. */
 	newWorkDisabled?: boolean;
+	/** A switch from the terminal is under way and the conversation is not readable yet. */
+	arriving?: boolean;
 	/** Reports accepted Chat work that must inform an interface-switch policy choice. */
 	onConversationWorkChange?: (state: ConversationWorkState) => void;
 }) {
@@ -458,13 +461,30 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		switchPresentation?.lockAgentTerminal && !switchPresentation.allowSourceInput,
 	);
 	const renderShellFallback = Boolean(shellTarget && session);
-	const optimisticChat = session.kind === "orchestrator" && isLoading && !renderShellFallback;
+	// A switch from the terminal shows the chat before the daemon has a
+	// conversation to read. The starting snapshot stands in for the whole
+	// arrival, even over a cached transcript, so history appears once and fades
+	// in instead of flashing, hiding, and reappearing as the controller restarts.
+	const optimisticArrival = Boolean(arriving) && !renderShellFallback;
+	const optimisticChat = (session.kind === "orchestrator" && isLoading && !renderShellFallback) || optimisticArrival;
+	const continueIntent = useRef<{ turnId: string; clientMessageId: string; sequence: number } | null>(null);
 	const renderSnapshot =
-		snapshot ??
+		(optimisticArrival
+			? { ...startingConversationSnapshot(session.id, session.provider), controller: { state: "stopped" as const } }
+			: snapshot) ??
 		(optimisticChat ? startingConversationSnapshot(session.id, session.provider) : undefined) ??
 		(renderShellFallback
 			? unavailableConversationSnapshot(session)
 			: undefined);
+	const stoppedTurnId = renderSnapshot ? continuableTurnId(renderSnapshot) : "";
+	useEffect(() => {
+		// Keep an ambiguous request's identity until durable progress confirms
+		// that intent ended. An undo can later make the same stop eligible again.
+		if (!stoppedTurnId && renderSnapshot && continueIntent.current &&
+			renderSnapshot.latestSequence > continueIntent.current.sequence) {
+			continueIntent.current = null;
+		}
+	}, [stoppedTurnId, renderSnapshot?.latestSequence]);
 	// Keep the project marked as starting until its controller is ready, so
 	// sidebar actions cannot launch a duplicate orchestrator.
 	useEffect(() => {
@@ -501,7 +521,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// run Chat is a state to explain rather than an error to spin on. A compatible
 	// session may switch interfaces, but retrying this failed controller by itself
 	// cannot change the answer.
-	if (unavailable && !renderShellFallback) {
+	if (unavailable && !renderShellFallback && !optimisticArrival) {
 		return (
 			<Centered>
 				<AlertTriangle aria-hidden="true" className="size-4 text-warning" />
@@ -516,7 +536,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		);
 	}
 
-	if (error || !renderSnapshot) {
+	if ((error && !optimisticArrival) || !renderSnapshot) {
 		return (
 			<Centered>
 				<AlertTriangle aria-hidden="true" className="size-4 text-destructive" />
@@ -568,6 +588,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				auxiliaryTabOrder={auxiliaryTabOrder}
 				onAuxiliaryTabOrderChange={onAuxiliaryTabOrderChange}
 				controllerTransitioning={controllerTransitioning}
+				loadingQuietly={optimisticChat && !optimisticArrival && session.provisionState !== "provisioning"}
 				agentResuming={agentResuming}
 				hasOlder={hasOlder}
 				loadingOlder={isLoadingOlder}
@@ -590,7 +611,17 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onDecide={commands.resolve}
 				onResolveInput={commands.resolveInput}
 				onInterrupt={commands.interrupt}
-				onContinueTurn={() => commands.send({ text: CONTINUE_STOPPED_TURN_PROMPT, continuation: true })}
+				onContinueTurn={() => {
+					const turnId = `${renderSnapshot.conversationId}:${renderSnapshot.activeBranchId ?? ""}:${stoppedTurnId}`;
+					if (continueIntent.current?.turnId !== turnId) {
+						continueIntent.current = { turnId, clientMessageId: crypto.randomUUID(), sequence: renderSnapshot.latestSequence };
+					}
+					return commands.send({
+						text: CONTINUE_STOPPED_TURN_PROMPT,
+						continuation: true,
+						clientMessageId: continueIntent.current.clientMessageId,
+					});
+				}}
 				onResumeAgent={() => {
 					void commands.resumeAgent().catch(() => {});
 				}}

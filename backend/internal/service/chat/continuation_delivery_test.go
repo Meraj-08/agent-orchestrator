@@ -2,7 +2,9 @@ package chat_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -64,11 +66,11 @@ func TestContinuationDeliveryPersistsEnrichedPromptAndIntakeIdentity(t *testing.
 		t.Fatal(err)
 	}
 	sent := h.conv.sentMessages()[1]
-	if !strings.Contains(sent.Text, "TASK_DONE") || !strings.Contains(sent.Text, "Keep the") || !sent.Continuation {
+	if !strings.Contains(continuationProviderContext(sent), "TASK_DONE") || !strings.Contains(continuationProviderContext(sent), "Keep the") || !sent.Continuation {
 		t.Fatalf("provider did not receive task context: %#v", sent)
 	}
 	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 3 })
-	if snapshot.Messages[2].Text != sent.Text || !snapshot.Messages[2].Continuation ||
+	if snapshot.Messages[2].Text != "Continue from where you stopped." || snapshot.Messages[2].DeliveryContentJSON == "" || !snapshot.Messages[2].Continuation ||
 		snapshot.Messages[2].ClientPayloadHash == "" {
 		t.Fatalf("context and identity not persisted: %#v", snapshot.Messages[2])
 	}
@@ -95,7 +97,7 @@ func TestContinuationDeliveryRepeatedStopKeepsTaskAndNewestResponse(t *testing.T
 	if _, err := h.svc.Send(ctx, testSession, continuationMessage("continue-2")); err != nil {
 		t.Fatal(err)
 	}
-	text := h.conv.sentTexts()[2]
+	text := continuationProviderContext(h.conv.sentMessages()[2])
 	if !strings.Contains(text, "TASK_DONE") || !strings.Contains(text, "Give every session a") ||
 		strings.Count(text, "Interrupted task context (JSON):") != 1 {
 		t.Fatalf("repeat continuation nested or lost context: %s", text)
@@ -122,13 +124,13 @@ func TestContinuationDeliveryRetryUsesFrozenContextAndMarker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	frozen := h.conv.sentTexts()[1]
+	frozen := h.conv.sentMessages()[1]
 	settleContinuationTestTurn(t, h, continued, "A later partial response", domain.TurnStateFailed)
 	retry, err := h.svc.RetryTurn(ctx, testSession, continued.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := h.conv.sentMessages()[2]; got.Text != frozen || !got.Continuation {
+	if got := h.conv.sentMessages()[2]; got.Text != frozen.Text || !reflect.DeepEqual(got.Content, frozen.Content) || !got.Continuation {
 		t.Fatalf("retry reconstructed context or lost marker: %#v", got)
 	}
 	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
@@ -175,13 +177,23 @@ func TestContinuationDeliveryQueuedPromptRetainsFrozenContext(t *testing.T) {
 	if err != nil || durable.TurnID != queued.ID {
 		t.Fatalf("durable queue: %#v, %v", durable, err)
 	}
-	if !strings.Contains(durable.Text, "QUEUED_TASK_DONE") || !strings.Contains(durable.Text, "An unfinished tip") {
+	if !strings.Contains(durable.DeliveryContentJSON, "QUEUED_TASK_DONE") || !strings.Contains(durable.DeliveryContentJSON, "An unfinished tip") {
 		t.Fatalf("queued continuation did not freeze context: %q", durable.Text)
 	}
 	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: first.ProviderTurnID, TurnState: domain.TurnStateInterrupted})
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return h.conv.sendCallCount() == 2 })
-	if got := h.conv.sentTexts()[1]; got != durable.Text {
-		t.Fatalf("queue drain changed its accepted prompt: %q != %q", got, durable.Text)
+	var frozenContent []ports.ChatContent
+	if err := json.Unmarshal([]byte(durable.DeliveryContentJSON), &frozenContent); err != nil {
+		t.Fatal(err)
+	}
+	expected := durable.Text
+	for _, block := range frozenContent {
+		if block.Internal {
+			expected += "\n\n" + block.Text
+		}
+	}
+	if got := h.conv.sentMessages()[1]; got.Text != expected {
+		t.Fatalf("queue drain changed its accepted prompt: %#v", got)
 	}
 }
 
@@ -193,7 +205,7 @@ func TestContinuationDeliveryRetrySurvivesControllerRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	frozen := h.conv.sentTexts()[1]
+	frozen := h.conv.sentMessages()[1]
 	settleContinuationTestTurn(t, h, continued, "", domain.TurnStateFailed)
 	if err := h.svc.Stop(ctx, testSession); err != nil {
 		t.Fatal(err)
@@ -217,7 +229,7 @@ func TestContinuationDeliveryRetrySurvivesControllerRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	sent := provider.sentMessages()
-	if len(sent) != 1 || sent[0].Text != frozen || !sent[0].Continuation {
+	if len(sent) != 1 || sent[0].Text != frozen.Text || !reflect.DeepEqual(sent[0].Content, frozen.Content) || !sent[0].Continuation {
 		t.Fatalf("restart retry lost its frozen context or marker: %#v", sent)
 	}
 }
@@ -247,7 +259,7 @@ func TestContinuationDeliveryHibernatedQueuePreservesContextAndMarker(t *testing
 		t.Fatal(err)
 	}
 	message := snapshot.Messages[len(snapshot.Messages)-1]
-	if !message.Continuation || !strings.Contains(message.Text, "TASK_DONE") || !strings.Contains(message.Text, "Keep the") {
+	if !message.Continuation || !strings.Contains(message.DeliveryContentJSON, "TASK_DONE") || !strings.Contains(message.DeliveryContentJSON, "Keep the") {
 		t.Fatalf("queued continuation lost context or marker: %#v", message)
 	}
 	if duplicate, err := h.svc.QueueUserMessage(ctx, testSession, request); err != nil || duplicate.ID != "" {
@@ -256,5 +268,116 @@ func TestContinuationDeliveryHibernatedQueuePreservesContextAndMarker(t *testing
 	queued, err := h.st.NextQueuedTurn(ctx, h.ctrl.ConversationID())
 	if err != nil || queued.Text != message.Text {
 		t.Fatalf("durable continuation queue lost frozen context: %#v, %v", queued, err)
+	}
+}
+
+func continuationProviderContext(message ports.ChatUserMessage) string {
+	text := message.Text
+	for _, block := range message.Content {
+		if block.Internal {
+			text += block.Text
+		}
+	}
+	return text
+}
+
+func TestContinuationDeliveryRecoversPromptOutsideBoundedPage(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	seedContinuationTask(t, h)
+	if err := h.svc.Stop(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	provider := newFakeConversation()
+	provider.turnSeq = 10
+	pages := 0
+	svc := chatsvc.New(chatsvc.Options{
+		Store: h.st, Reader: fullSnapshotReader(h.st), Sessions: h.st,
+		Drivers: fakeRegistry{driver: fakeDriver{conv: provider}},
+		NewID:   uuid.NewString, Now: h.now,
+		PageReader: chatsvc.SnapshotPageReaderFunc(func(ctx context.Context, id string, before, limit int64) (chatsvc.ConversationRows, error) {
+			pages++
+			if before != 0 || limit != 128 {
+				t.Fatalf("unexpected history read: %d/%d", before, limit)
+			}
+			rows, err := h.st.LoadConversationSnapshotPage(ctx, id, before, limit)
+			if err != nil {
+				return chatsvc.ConversationRows{}, err
+			}
+			var messages []domain.ConversationMessage
+			// Model a live page crowded by tool activity, with the request outside it.
+			for _, message := range rows.Messages {
+				if message.Role != domain.MessageRoleUser {
+					messages = append(messages, message)
+				}
+			}
+			return chatsvc.ConversationRows{Turns: rows.Turns, Messages: messages, OldestSequence: rows.OldestSequence, HasMoreBefore: true}, nil
+		}),
+	})
+	if _, err := svc.Start(ctx, chatsvc.StartConfig{SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessCodex, WorkspacePath: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = svc.Stop(ctx, testSession) })
+	if _, err := svc.Send(ctx, testSession, continuationMessage("bounded-continue")); err != nil {
+		t.Fatal(err)
+	}
+	sent := provider.sentMessages()
+	if pages != 1 || len(sent) != 1 || !strings.Contains(sent[0].Text, "TASK_DONE") || !strings.Contains(sent[0].Text, "Keep the") {
+		t.Fatalf("lost bounded context: pages=%d sent=%#v", pages, sent)
+	}
+}
+
+func TestContinuationPromptRequiresStoppedActiveRequest(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	turn := seedContinuationTask(t, h)
+	prompt, err := h.st.ContinuationPrompt(ctx, h.ctrl.ConversationID(), turn.ID)
+	if err != nil || !strings.Contains(prompt.Text, "TASK_DONE") {
+		t.Fatalf("stopped prompt: %#v, %v", prompt, err)
+	}
+	if _, err := h.st.ContinuationPrompt(ctx, "different-conversation", turn.ID); err == nil {
+		t.Fatal("cross-conversation prompt leaked")
+	}
+	if err := h.st.SettleTurnByID(ctx, turn.ID, domain.TurnStateCompleted, "", h.now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.st.ContinuationPrompt(ctx, h.ctrl.ConversationID(), turn.ID); err == nil {
+		t.Fatal("completed task remained continuable")
+	}
+}
+
+func TestContinuationEligibilitySurvivesQueueSweepOutsideLivePage(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	original, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "Original interrupted task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 140; i++ {
+		queued, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "Undispatched queued task"})
+		if err != nil || queued.State != domain.TurnStateQueued {
+			t.Fatalf("queued turn: %#v, %v", queued, err)
+		}
+	}
+	if err := h.svc.Interrupt(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	settleContinuationTestTurn(t, h, original, "", domain.TurnStateInterrupted)
+	rows, err := h.st.LoadConversationSnapshotPage(ctx, h.ctrl.ConversationID(), 0, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows.Messages) > 64 || chatsvc.ContinuableTurnID(rows.Turns) != original.ID {
+		t.Fatalf("bounded page lost the actual stopped task: messages=%d turns=%#v", len(rows.Messages), rows.Turns)
+	}
+	if err := h.st.SettleTurnByID(ctx, original.ID, domain.TurnStateCompleted, "", h.now()); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = h.st.LoadConversationSnapshotPage(ctx, h.ctrl.ConversationID(), 0, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chatsvc.ContinuableTurnID(rows.Turns) != "" {
+		t.Fatal("queue sweep revived a completed task")
 	}
 }

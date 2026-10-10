@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -77,6 +78,10 @@ func fullSnapshotReader(st *sqlite.Store) chatsvc.SnapshotReader {
 /* ---- a fake conversation the controller can drive ---------------------- */
 
 type fakeConversation struct {
+	// noNetwork makes SandboxAllowsNetwork report a sandbox with no network.
+	noNetwork bool
+	// networkMode, when set, is the one approval mode whose sandbox has network.
+	networkMode            ports.PermissionMode
 	events                 chan ports.ChatEvent
 	providerConversationID string
 
@@ -255,6 +260,15 @@ func newFakeConversation() *fakeConversation {
 }
 
 func (f *fakeConversation) ProviderConversationID() string { return f.providerConversationID }
+
+// SandboxAllowsNetwork is the agent sandbox's network, as Codex reports it;
+// noNetwork plays a Codex thread in accept-edits or auto.
+func (f *fakeConversation) SandboxAllowsNetwork(mode ports.PermissionMode) bool {
+	if f.networkMode != "" {
+		return mode == f.networkMode
+	}
+	return !f.noNetwork
+}
 func (f *fakeConversation) Capabilities() ports.ChatCapabilities {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -3099,12 +3113,18 @@ func TestFreshProjectControllerStartFailureKeepsPreviousHistoryHidden(t *testing
 /* ---- harness ----------------------------------------------------------- */
 
 type harness struct {
-	svc       *chatsvc.Service
-	st        *sqlite.Store
-	conv      *fakeConversation
-	ctrl      *chatsvc.Controller
-	activity  *recordingActivity
-	hostStops atomic.Int32
+	svc        *chatsvc.Service
+	st         *sqlite.Store
+	conv       *fakeConversation
+	ctrl       *chatsvc.Controller
+	activity   *recordingActivity
+	hostStops  atomic.Int32
+	renders    *attachmentstore.Store
+	rendersDir string
+	// reconciled lists the sessions whose output type a save asked to update;
+	// reconcileErr is what that update returns.
+	reconciled   []domain.SessionID
+	reconcileErr error
 
 	clockMu sync.Mutex
 	clock   time.Time
@@ -3171,6 +3191,8 @@ func newHarnessWithConversationAndStoreForHarness(
 		activity: &recordingActivity{},
 		clock:    time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC),
 	}
+	h.rendersDir = t.TempDir()
+	h.renders = attachmentstore.New(h.rendersDir)
 
 	// Guarded because the id factory is called from both the projection goroutine and
 	// whichever goroutine a test drives commands from, and an unsynchronized counter
@@ -3197,7 +3219,13 @@ func newHarnessWithConversationAndStoreForHarness(
 			counter++
 			return fmt.Sprintf("id-%03d", counter)
 		},
-		Now: h.now,
+		Now:     h.now,
+		Renders: h.renders,
+		DataDir: h.rendersDir,
+		ReconcileOutputType: func(_ context.Context, id domain.SessionID) error {
+			h.reconciled = append(h.reconciled, id)
+			return h.reconcileErr
+		},
 	})
 
 	ctrl, err := svc.Start(context.Background(), chatsvc.StartConfig{
@@ -7163,6 +7191,7 @@ func TestReservedBoundaryAdoptsSuccessorHandleWithoutRewritingHistory(t *testing
 func TestSendContinuationDeliversTextAndRecordsTheFact(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
+	seedContinuationTask(t, h)
 
 	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
 		Text: "Continue from where you stopped.", ClientMessageID: "c-continue",
@@ -7170,11 +7199,11 @@ func TestSendContinuationDeliversTextAndRecordsTheFact(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Send continuation: %v", err)
 	}
-	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 1 })
-	if !snapshot.Messages[0].Continuation {
-		t.Fatalf("stored message = %#v, want continuation", snapshot.Messages[0])
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 3 })
+	if !snapshot.Messages[2].Continuation {
+		t.Fatalf("stored message = %#v, want continuation", snapshot.Messages[2])
 	}
-	if got := h.conv.sentTexts(); len(got) != 1 || got[0] != "Continue from where you stopped." {
+	if got := h.conv.sentTexts(); len(got) != 2 || !strings.HasPrefix(got[1], "Continue from where you stopped.\n\n") || !strings.Contains(got[1], "TASK_DONE") {
 		t.Fatalf("provider received %v, want the continue text", got)
 	}
 }

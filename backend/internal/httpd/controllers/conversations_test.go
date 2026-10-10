@@ -766,3 +766,17 @@ func TestConversationSnapshotMarksContinuation(t *testing.T) {
 		t.Fatalf("continuation message = %#v, want continuation: true", messages[1])
 	}
 }
+
+func TestContinuationUnavailableIsAConflict(t *testing.T) {
+	service := &fakeConversationService{sendErr: chatsvc.ErrContinuationUnavailable}
+	server := conversationTestServer(t, service)
+	body, status, _ := doRequest(t, server, http.MethodPost,
+		"/api/v1/sessions/p1-1/conversation/messages", `{"text":"Continue","continuation":true}`)
+	var response struct {
+		Code string `json:"code"`
+	}
+	mustJSON(t, body, &response)
+	if status != http.StatusConflict || response.Code != "CHAT_CONTINUATION_UNAVAILABLE" {
+		t.Fatalf("stale Continue response: %d %s", status, body)
+	}
+}

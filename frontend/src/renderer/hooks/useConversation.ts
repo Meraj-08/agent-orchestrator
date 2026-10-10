@@ -1484,6 +1484,7 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 	].sort((a, b) => a.sequence - b.sequence);
 
 	return {
+		continueTurnId: wire.continueTurnId,
 		conversationId: wire.conversationId,
 		sessionId: wire.sessionId,
 		harness: wire.harness ?? "",

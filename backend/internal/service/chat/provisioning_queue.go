@@ -49,7 +49,7 @@ func (s *Service) queueWithoutController(
 		return domain.ConversationTurn{}, err
 	}
 
-	msg, err = prepareContinuation(ctx, s.store, s.reader, conversation.ID, msg)
+	msg, err = prepareContinuation(ctx, s.store, s.reader, s.pageReader, conversation.ID, msg)
 	if err != nil {
 		return domain.ConversationTurn{}, err
 	}
