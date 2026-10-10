@@ -166,7 +166,7 @@ func stoppedContinuationContext(rows ConversationRows) string {
 					continue
 				}
 				original = message
-				original.Text, original.Continuation = *carried.OriginalRequest, false
+				original.Text = *carried.OriginalRequest
 				original.DeliveryContentJSON = string(carried.Attachments)
 				carriedTail = carried.ResponseTail
 			}
