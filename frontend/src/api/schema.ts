@@ -5277,6 +5277,8 @@ export interface components {
             conversationCheckpointOrigin?: "human" | "coordination";
             /** @description Opaque identity of an AO-authored semantic prompt accepted by the native agent. */
             coordinationId?: string;
+            /** @description Provider process-kind marker (Claude's CLAUDE_CODE_ENTRYPOINT) of the process that fired the hook. */
+            entrypoint?: string;
             /** @description AO hook sub-command that produced this state (e.g. post-tool-use). */
             event?: string;
             /** @description Latest assistant update exposed by the provider hook. */
