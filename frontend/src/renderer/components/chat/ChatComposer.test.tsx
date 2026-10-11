@@ -276,12 +276,15 @@ describe("send keys", () => {
 		expect(screen.queryByRole("button", { name: "Continue turn" })).not.toBeInTheDocument();
 	});
 
-	it("shows why Continue failed and offers it again", async () => {
-		const onContinue = vi.fn().mockRejectedValueOnce(new Error("The agent is not accepting messages"));
+	it.each(["rejected promise", "synchronous throw"])("recovers from a Continue failure: %s", async (failure) => {
+		const error = new Error("Cannot continue now");
+		const onContinue = vi.fn(() => {
+			if (failure === "synchronous throw") throw error;
+			return Promise.reject(error);
+		});
 		renderComposer({ onContinue });
-
 		await userEvent.click(screen.getByRole("button", { name: "Continue turn" }));
-		expect(await screen.findByText("The agent is not accepting messages")).toBeInTheDocument();
+		expect(await screen.findByText(error.message)).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Continue turn" })).toBeEnabled();
 	});
 
@@ -296,13 +299,6 @@ describe("send keys", () => {
 		expect(onContinue).toHaveBeenCalledOnce();
 		await act(async () => request.resolve());
 		expect(button).toBeEnabled();
-	});
-
-	it("recovers when Continue throws before returning a promise", async () => {
-		renderComposer({ onContinue: () => { throw new Error("Cannot continue now"); } });
-		await userEvent.click(screen.getByRole("button", { name: "Continue turn" }));
-		expect(await screen.findByText("Cannot continue now")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Continue turn" })).toBeEnabled();
 	});
 
 	it("sends on Enter", async () => {

@@ -24,11 +24,11 @@ var ErrContinuationUnavailable = errors.New("the interrupted task is no longer a
 // Persisting internal content makes queue recovery and retries send the same context rather
 // than reconstructing it from a conversation that may have changed meanwhile.
 func (c *Controller) prepareContinuation(ctx context.Context, msg ports.ChatUserMessage) (ports.ChatUserMessage, error) {
-	return prepareContinuation(ctx, c.store, c.continuationReader, c.continuationPageReader, c.conversation.ID, msg)
+	return prepareContinuation(ctx, c.store, c.continuationPageReader, c.conversation.ID, msg)
 }
 
-func prepareContinuation(ctx context.Context, store Store, reader SnapshotReader, pageReader SnapshotPageReader, conversationID string, msg ports.ChatUserMessage) (ports.ChatUserMessage, error) {
-	if !msg.Continuation || (reader == nil && pageReader == nil) {
+func prepareContinuation(ctx context.Context, store Store, pageReader SnapshotPageReader, conversationID string, msg ports.ChatUserMessage) (ports.ChatUserMessage, error) {
+	if !msg.Continuation {
 		return msg, nil
 	}
 	if msg.ClientMessageID != "" {
@@ -42,19 +42,15 @@ func prepareContinuation(ctx context.Context, store Store, reader SnapshotReader
 			return msg, nil
 		}
 	}
-	var rows ConversationRows
-	var err error
-	if pageReader != nil {
-		rows, err = pageReader.LoadConversationSnapshotPage(ctx, conversationID, 0, 128)
-	} else {
-		// Compatibility for injected readers; production uses bounded pages.
-		rows, err = reader.LoadConversationSnapshot(ctx, conversationID)
+	if pageReader == nil {
+		return msg, fmt.Errorf("prepare continuation: bounded history reader is unavailable")
 	}
+	rows, err := pageReader.LoadConversationSnapshotPage(ctx, conversationID, 0, 128)
 	if err != nil {
 		return msg, fmt.Errorf("read interrupted conversation: %w", err)
 	}
 	reminder := stoppedContinuationContext(rows)
-	if reminder == "" && pageReader != nil && store != nil {
+	if reminder == "" && store != nil {
 		if turnID := ContinuableTurnID(rows.Turns); turnID != "" {
 			prompt, readErr := store.ContinuationPrompt(ctx, conversationID, turnID)
 			if errors.Is(readErr, domain.ErrNoConversationTurn) {
@@ -70,9 +66,7 @@ func prepareContinuation(ctx context.Context, store Store, reader SnapshotReader
 	if reminder == "" {
 		return msg, ErrContinuationUnavailable
 	}
-	if reminder != "" {
-		msg.Content = append(msg.Content, ports.ChatContent{Type: "text", Text: reminder, Internal: true})
-	}
+	msg.Content = append(msg.Content, ports.ChatContent{Type: "text", Text: reminder, Internal: true})
 	return msg, nil
 }
 
@@ -81,10 +75,7 @@ func prepareContinuation(ctx context.Context, store Store, reader SnapshotReader
 func ContinuableTurnID(turns []domain.ConversationTurn) string {
 	for i := len(turns) - 1; i >= 0; i-- {
 		turn := turns[i]
-		if turn.RolledBackAt != nil || turn.State == domain.TurnStateCancelled {
-			continue
-		}
-		if turn.State == domain.TurnStateInterrupted && turn.StartedAt == nil && turn.ProviderTurnID == "" {
+		if !continuationRelevantTurn(turn) {
 			continue
 		}
 		if turn.State == domain.TurnStateInterrupted {
@@ -95,33 +86,33 @@ func ContinuableTurnID(turns []domain.ConversationTurn) string {
 	return ""
 }
 
+// continuationRelevantTurn excludes withdrawn work and queued messages swept
+// to interrupted by Stop before they reached the provider.
+func continuationRelevantTurn(turn domain.ConversationTurn) bool {
+	return turn.RolledBackAt == nil && turn.State != domain.TurnStateCancelled &&
+		(turn.State != domain.TurnStateInterrupted || turn.StartedAt != nil || turn.ProviderTurnID != "")
+}
+
 // stoppedContinuationContext consumes the active-lineage snapshot, never another
 // session's history. It supplies a task reminder, not a replacement transcript or
 // an execution checkpoint. Reasoning and tool outputs are deliberately omitted.
 func stoppedContinuationContext(rows ConversationRows) string {
-	turns := make(map[string]domain.ConversationTurn, len(rows.Turns))
-	var stopped domain.ConversationTurn
-	for _, turn := range rows.Turns {
-		if turn.RolledBackAt != nil || turn.State == domain.TurnStateCancelled {
-			continue
-		}
-		// Stop also interrupts queued messages that never reached the provider.
-		// Those are not the task the user wants to continue.
-		if turn.State == domain.TurnStateInterrupted && turn.ProviderTurnID == "" && turn.StartedAt == nil {
-			continue
-		}
-		turns[turn.ID] = turn
-		stopped = turn
-	}
-	if stopped.ID != ContinuableTurnID(rows.Turns) || stopped.ID == "" {
+	stoppedID := ContinuableTurnID(rows.Turns)
+	if stoppedID == "" {
 		return ""
+	}
+	turns := make(map[string]domain.ConversationTurn, len(rows.Turns))
+	for _, turn := range rows.Turns {
+		if continuationRelevantTurn(turn) {
+			turns[turn.ID] = turn
+		}
 	}
 
 	var original domain.ConversationMessage
 	var carriedTail string
 	var cutoff int64
 	for _, message := range rows.Messages {
-		if message.TurnID == stopped.ID && message.Role == domain.MessageRoleUser {
+		if message.TurnID == stoppedID && message.Role == domain.MessageRoleUser {
 			cutoff = message.Sequence
 			break
 		}
@@ -185,7 +176,7 @@ func stoppedContinuationContext(rows ConversationRows) string {
 		if _, visible := turns[turn.ID]; inChain && visible {
 			chain[turn.ID] = true
 		}
-		if turn.ID == stopped.ID {
+		if turn.ID == stoppedID {
 			break
 		}
 	}

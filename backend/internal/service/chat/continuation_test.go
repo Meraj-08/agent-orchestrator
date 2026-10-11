@@ -15,7 +15,7 @@ import (
 
 func TestPrepareContinuationReadFailureDoesNotSendWithoutContext(t *testing.T) {
 	readError := errors.New("conversation unavailable")
-	controller := Controller{continuationReader: SnapshotReaderFunc(func(context.Context, string) (ConversationRows, error) {
+	controller := Controller{continuationPageReader: SnapshotPageReaderFunc(func(context.Context, string, int64, int64) (ConversationRows, error) {
 		return ConversationRows{}, readError
 	})}
 	message := ports.ChatUserMessage{Text: "Continue from where you stopped.", Continuation: true}
@@ -192,13 +192,8 @@ func TestStoppedContinuationContextPreservesVerifiedExcerpt(t *testing.T) {
 }
 
 func TestPrepareContinuationUsesBoundedPageAndKeepsVisibleText(t *testing.T) {
-	fullRead := false
 	pages := 0
 	controller := Controller{
-		continuationReader: SnapshotReaderFunc(func(context.Context, string) (ConversationRows, error) {
-			fullRead = true
-			return ConversationRows{}, errors.New("full read forbidden")
-		}),
 		continuationPageReader: SnapshotPageReaderFunc(func(_ context.Context, _ string, before, limit int64) (ConversationRows, error) {
 			pages++
 			if before != 0 || limit != 128 {
@@ -209,7 +204,7 @@ func TestPrepareContinuationUsesBoundedPageAndKeepsVisibleText(t *testing.T) {
 	}
 	request := ports.ChatUserMessage{Text: "Continue from where you stopped.", Continuation: true}
 	got, err := controller.prepareContinuation(context.Background(), request)
-	if err != nil || fullRead || pages != 1 || got.Text != request.Text || len(got.Content) != 1 || !got.Content[0].Internal {
+	if err != nil || pages != 1 || got.Text != request.Text || len(got.Content) != 1 || !got.Content[0].Internal {
 		t.Fatalf("provider context leaked or full history loaded: %#v, %v", got, err)
 	}
 	delivered := excerptDeliveryMessage(got)
@@ -264,17 +259,26 @@ func TestContinuationNativeReplayMatchesDispatchedPromptWithOpaqueIDs(t *testing
 	if mapped["new-opaque"].messages[nativeHistoryMessageFingerprint(domain.MessageRoleUser, text)] != 1 {
 		t.Fatal("inherited replay compared visible text instead of dispatched text")
 	}
-	if message.Text != "Continue from where you stopped." {
-		t.Fatal("provider matching leaked context into visible text")
-	}
 }
 
 func TestPrepareContinuationRejectsStaleIntent(t *testing.T) {
 	rows := continuationRows()
 	rows.Turns[1].State = domain.TurnStateCompleted
-	controller := Controller{continuationReader: SnapshotReaderFunc(func(context.Context, string) (ConversationRows, error) { return rows, nil })}
+	controller := Controller{continuationPageReader: SnapshotPageReaderFunc(func(context.Context, string, int64, int64) (ConversationRows, error) { return rows, nil })}
 	got, err := controller.prepareContinuation(context.Background(), ports.ChatUserMessage{Text: "Continue", Continuation: true})
 	if !errors.Is(err, ErrContinuationUnavailable) || len(got.Content) != 0 {
 		t.Fatalf("stale intent started context-free work: %#v, %v", got, err)
+	}
+}
+
+func TestPrepareContinuationRequiresBoundedReader(t *testing.T) {
+	controller := Controller{}
+	message := ports.ChatUserMessage{Text: "Continue", Continuation: true}
+	if _, err := controller.prepareContinuation(context.Background(), message); err == nil {
+		t.Fatal("missing reader must not send a context-free continuation")
+	}
+	message.Continuation = false
+	if _, err := controller.prepareContinuation(context.Background(), message); err != nil {
+		t.Fatalf("ordinary message requires no history reader: %v", err)
 	}
 }

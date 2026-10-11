@@ -92,25 +92,16 @@ describe("ChatWorkspace continue", () => {
 		expect(continueButton()).toBeNull();
 	});
 
-	it("does not offer Continue once later work followed the stop", () => {
+	it.each([
+		["later completed work", "interrupted", "completed"],
+		["a completed turn", "completed", "completed"],
+		["a failed turn", "completed", "failed"],
+	] as const)("does not offer Continue after %s", (_scenario, earlierState, latestState) => {
 		render(
 			<ChatWorkspace
-				snapshot={stoppedSnapshot((turns) => turns.map((turn) => ({ ...turn, state: turn.id === "turn-2" ? "completed" as const : "interrupted" as const })))}
+				snapshot={stoppedSnapshot((turns) => turns.map((turn) => ({ ...turn, state: turn.id === "turn-2" ? latestState : earlierState })))}
 				onContinueTurn={vi.fn()}
 			/>,
-		);
-		expect(continueButton()).toBeNull();
-	});
-
-	it("does not offer Continue after a turn that completed or failed", () => {
-		const { unmount } = render(
-			<ChatWorkspace snapshot={stoppedSnapshot((turns) => turns.map((turn) => ({ ...turn, state: "completed" as const })))} onContinueTurn={vi.fn()} />,
-		);
-		expect(continueButton()).toBeNull();
-		unmount();
-
-		render(
-			<ChatWorkspace snapshot={stoppedSnapshot((turns) => turns.map((turn) => (turn.id === "turn-2" ? { ...turn, state: "failed" as const } : turn)))} onContinueTurn={vi.fn()} />,
 		);
 		expect(continueButton()).toBeNull();
 	});

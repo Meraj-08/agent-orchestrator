@@ -203,7 +203,6 @@ type Controller struct {
 
 	conv                   ports.ChatConversation
 	store                  Store
-	continuationReader     SnapshotReader
 	continuationPageReader SnapshotPageReader
 	activity               ActivityRecorder
 	log                    *slog.Logger
@@ -364,6 +363,7 @@ func newController(
 	now Clock,
 	onAccountChanged func(domain.SessionID, string, domain.AgentHarness),
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation),
+	pageReader SnapshotPageReader,
 ) *Controller {
 	c := &Controller{
 		sessionID:              sessionID,
@@ -373,6 +373,7 @@ func newController(
 		harness:                harness,
 		conv:                   conv,
 		store:                  store,
+		continuationPageReader: pageReader,
 		activity:               activity,
 		log:                    log,
 		newID:                  newID,

@@ -66,6 +66,9 @@ func TestContinuationDeliveryPersistsEnrichedPromptAndIntakeIdentity(t *testing.
 		t.Fatal(err)
 	}
 	sent := h.conv.sentMessages()[1]
+	if !strings.HasPrefix(sent.Text, "Continue from where you stopped.\n\n") {
+		t.Fatalf("provider received %q, want the continue prompt followed by context", sent.Text)
+	}
 	if !strings.Contains(continuationProviderContext(sent), "TASK_DONE") || !strings.Contains(continuationProviderContext(sent), "Keep the") || !sent.Continuation {
 		t.Fatalf("provider did not receive task context: %#v", sent)
 	}
@@ -214,7 +217,7 @@ func TestContinuationDeliveryRetrySurvivesControllerRestart(t *testing.T) {
 	provider := newFakeConversation()
 	provider.turnSeq = 10 // a reconnected provider's turn IDs are still unique
 	svc := chatsvc.New(chatsvc.Options{
-		Store: h.st, Reader: fullSnapshotReader(h.st), Sessions: h.st,
+		Store: h.st, Reader: fullSnapshotReader(h.st), PageReader: boundedSnapshotReader(h.st), Sessions: h.st,
 		Drivers: fakeRegistry{driver: fakeDriver{conv: provider}},
 		NewID:   uuid.NewString, Now: h.now,
 	})
@@ -379,5 +382,69 @@ func TestContinuationEligibilitySurvivesQueueSweepOutsideLivePage(t *testing.T) 
 	}
 	if chatsvc.ContinuableTurnID(rows.Turns) != "" {
 		t.Fatal("queue sweep revived a completed task")
+	}
+}
+
+func TestContinuationAfterControllerReplacementKeepsTaskContext(t *testing.T) {
+	h, _, driver := newEditHarness(t, true)
+	ctx := context.Background()
+	first := completeTurn(t, h, "ORIGINAL_TASK", "provider-turn-1")
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 2 })
+	edited, err := h.svc.EditMessage(ctx, testSession, first, ports.ChatUserMessage{Text: "EDITED_TASK"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv = driver.fresh
+	settleContinuationTestTurn(t, h, edited.Turn, "EDIT_PARTIAL", domain.TurnStateInterrupted)
+	continued, err := h.svc.Send(ctx, testSession, continuationMessage("continue-edited"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := continuationProviderContext(h.conv.sentMessages()[1]); !strings.Contains(text, "EDITED_TASK") || !strings.Contains(text, "EDIT_PARTIAL") {
+		t.Fatalf("edited controller lost context: %s", text)
+	}
+	settleContinuationTestTurn(t, h, continued, "", domain.TurnStateCompleted)
+	if _, err := h.svc.ActivateBranch(ctx, testSession, edited.SourceBranchID); err != nil {
+		t.Fatal(err)
+	}
+	h.conv = driver.resumed["thread-1"]
+	turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "ACTIVATED_TASK"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settleContinuationTestTurn(t, h, turn, "ACTIVATED_PARTIAL", domain.TurnStateInterrupted)
+	if _, err := h.svc.Send(ctx, testSession, continuationMessage("continue-activated")); err != nil {
+		t.Fatal(err)
+	}
+	if text := continuationProviderContext(h.conv.sentMessages()[1]); !strings.Contains(text, "ACTIVATED_TASK") || !strings.Contains(text, "ACTIVATED_PARTIAL") {
+		t.Fatalf("activated controller lost context: %s", text)
+	}
+}
+
+func TestContinuationAfterFailedEditRecoveryKeepsTaskContext(t *testing.T) {
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	completeTurn(t, h, "EARLIER_TASK", "provider-turn-1")
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 2 })
+	first := completeTurn(t, h, "TASK_BEFORE_FAILED_EDIT", "provider-turn-2")
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 4 })
+	replacement := driver.resumed["thread-forked"]
+	replacement.mu.Lock()
+	replacement.sendErr = refusedError{msg: "provider declined edit"}
+	replacement.mu.Unlock()
+	if _, err := h.svc.EditMessage(ctx, testSession, first, ports.ChatUserMessage{Text: "REJECTED_EDIT"}); !errors.Is(err, chatsvc.ErrProviderRefused) {
+		t.Fatalf("expected rejected edit, got %v", err)
+	}
+	h.conv = driver.resumed["thread-1"]
+	turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "RECOVERED_TASK"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settleContinuationTestTurn(t, h, turn, "RECOVERED_PARTIAL", domain.TurnStateInterrupted)
+	if _, err := h.svc.Send(ctx, testSession, continuationMessage("continue-recovered")); err != nil {
+		t.Fatal(err)
+	}
+	if text := continuationProviderContext(h.conv.sentMessages()[1]); !strings.Contains(text, "RECOVERED_TASK") || !strings.Contains(text, "RECOVERED_PARTIAL") {
+		t.Fatalf("recovered controller lost context: %s", text)
 	}
 }
