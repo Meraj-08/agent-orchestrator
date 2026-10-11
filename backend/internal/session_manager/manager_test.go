@@ -622,9 +622,12 @@ type fakeRuntime struct {
 	supervisedErr           error
 	supervisedAliveOverride *bool
 	supervisedSequence      []bool
-	destroyedIDs            []string
-	fencedResult            ports.FencedProbeResult
-	fencedRefs              []ports.FencedRuntimeRef
+	// exitedLaunches marks launches whose managed agent child is gone even
+	// though the pane (aliveByHandle) survives, as the strict probe reports it.
+	exitedLaunches map[string]bool
+	destroyedIDs   []string
+	fencedResult   ports.FencedProbeResult
+	fencedRefs     []ports.FencedRuntimeRef
 }
 
 func (r *fakeRuntime) Interrupt(_ context.Context, handle ports.RuntimeHandle) error {
@@ -768,6 +771,7 @@ func (r *fakeRuntime) Destroy(_ context.Context, handle ports.RuntimeHandle) err
 	}
 	return nil
 }
+func (r *fakeRuntime) base() *fakeRuntime { return r }
 func (r *fakeRuntime) IsAlive(_ context.Context, handle ports.RuntimeHandle) (bool, error) {
 	if r.aliveErr != nil {
 		return false, r.aliveErr
@@ -784,6 +788,9 @@ func (r *fakeRuntime) IsSupervisedProcessAlive(_ context.Context, handle ports.R
 	return r.aliveByHandle[handle.ID], nil
 }
 func (r *fakeRuntime) IsExactSupervisedProcessAlive(ctx context.Context, handle ports.RuntimeHandle, ref ports.SupervisedProcessRef) (bool, error) {
+	if r.exitedLaunches[ref.LaunchID] {
+		return false, nil
+	}
 	if len(r.supervisedSequence) > 0 {
 		alive := r.supervisedSequence[0]
 		r.supervisedSequence = r.supervisedSequence[1:]
@@ -2227,6 +2234,13 @@ func newExitedResumeManager(t *testing.T, runtime runtimeController, agent ports
 		Executable:  func() (string, error) { return "/opt/ao", nil },
 		NewLaunchID: func() string { return "launch-new" },
 	})
+	// The exited fixture's pane may survive, but its launched agent has exited.
+	if fake, ok := runtime.(interface{ base() *fakeRuntime }); ok {
+		if fake.base().exitedLaunches == nil {
+			fake.base().exitedLaunches = map[string]bool{}
+		}
+		fake.base().exitedLaunches["launch-old"] = true
+	}
 	return m, st, ws
 }
 
@@ -2335,6 +2349,28 @@ func TestResumeAgent_RestartFailureLeavesSessionExited(t *testing.T) {
 	}
 	if !reflect.DeepEqual(lcm.cancelled, []string{"mer-1:launch-new"}) {
 		t.Fatalf("failed launch cleanup = %v, want waiting hooks released", lcm.cancelled)
+	}
+}
+
+func TestResumeAgent_RefusesTUIWhoseLaunchedAgentIsStillAlive(t *testing.T) {
+	baseRuntime := &fakeRuntime{aliveByHandle: map[string]bool{"tmux-mer-1": true}}
+	runtime := &fakeRestartRuntime{fakeRuntime: baseRuntime}
+	agent := supervisedLaunchAgent{launchArgvAgent{argv: []string{"claude", "--resume", "side-run"}}}
+	m, st, _ := newExitedResumeManager(t, runtime, agent)
+	// A side `claude -p` in the worktree reported SessionEnd under the current
+	// launch, but the exact agent AO launched is still running (#6454).
+	delete(baseRuntime.exitedLaunches, "launch-old")
+	before := st.sessions["mer-1"]
+
+	if _, err := m.ResumeAgentWithMode(ctx, "mer-1"); !errors.Is(err, ErrAgentNotExited) {
+		t.Fatalf("resume error = %v, want ErrAgentNotExited", err)
+	}
+	if runtime.restarted != 0 || baseRuntime.created != 0 || baseRuntime.destroyed != 0 {
+		t.Fatalf("resume replaced a live agent: restarted=%d created=%d destroyed=%d",
+			runtime.restarted, baseRuntime.created, baseRuntime.destroyed)
+	}
+	if got := st.sessions["mer-1"]; !reflect.DeepEqual(got, before) {
+		t.Fatalf("refused resume mutated session: got %+v, want %+v", got, before)
 	}
 }
 
