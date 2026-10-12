@@ -2515,6 +2515,13 @@ func permissionConfigOptions(harness domain.AgentHarness, options []ports.ChatCo
 					choice.PermissionMode = mode
 					choice.Name = label
 				}
+			case domain.HarnessAgy:
+				// Antigravity's modes are approval tiers, relabelled into AO's
+				// vocabulary so the composer reads as the usual approval control.
+				if mode, label, ok := agyApprovalTier(choice.Value); ok {
+					choice.PermissionMode = mode
+					choice.Name = label
+				}
 			}
 		}
 	}
@@ -2531,6 +2538,22 @@ func commandCodeApprovalMode(value string) (domain.PermissionMode, bool) {
 		return domain.PermissionModeBypassPermissions, true
 	default:
 		return "", false
+	}
+}
+
+// agyApprovalTier maps Antigravity's ACP modes onto AO's approval tiers. AO's
+// auto and bypass both select yolo, Antigravity's only run-without-asking mode,
+// which the menu presents as AO's auto.
+func agyApprovalTier(value string) (domain.PermissionMode, string, bool) {
+	switch value {
+	case "default":
+		return domain.PermissionModeDefault, "Use agent permissions", true
+	case "auto_edit":
+		return domain.PermissionModeAcceptEdits, "Accept edits", true
+	case "yolo":
+		return domain.PermissionModeAuto, "Auto-approve", true
+	default:
+		return "", "", false
 	}
 }
 

@@ -59,6 +59,12 @@ type Config struct {
 	// invoking an adapter-specific version flag, which many stdio agents do not
 	// implement and which can emit protocol bytes instead of a version string.
 	ValidateInitialize func(acpsdk.InitializeResponse) error
+	// AfterInitialize runs once on a freshly initialized provider connection,
+	// before any session is created. It is for bindings whose agent needs a
+	// one-time ACP call on the connection, such as authenticating with a method
+	// the user has already completed elsewhere. It does not run when AO
+	// reattaches to a persistent host, whose provider is already set up.
+	AfterInitialize func(context.Context, *acpsdk.ClientSideConnection, acpsdk.InitializeResponse) error
 	// SessionMeta carries adapter-defined ACP extensions whenever AO creates the
 	// provider-side session object: session/new, session/load, or
 	// session/resume. Standing context such as a system prompt is process input,
@@ -636,6 +642,12 @@ func (d *Driver) initialize(
 		if err := d.cfg.ValidateInitialize(init); err != nil {
 			conv.discard()
 			return nil, acpsdk.InitializeResponse{}, nil, fmt.Errorf("%w: %w", ports.ErrChatDriverIncompatible, err)
+		}
+	}
+	if d.cfg.AfterInitialize != nil {
+		if err := d.cfg.AfterInitialize(ctx, conv.conn, init); err != nil {
+			conv.discard()
+			return nil, acpsdk.InitializeResponse{}, nil, normalizeACPError("ACP after initialize", err)
 		}
 	}
 	return conv, init, nil, nil
