@@ -117,6 +117,20 @@ Copilot's replay carries no message ids. AO splits the replay into turns at
 each user prompt that follows an answer, so every prompt keeps its own reply and
 AO can match the replay against the turns it already recorded.
 
+Switching from the terminal requires proof that it is idle. A terminal resumed
+by a Chat to Terminal switch fires Copilot's `sessionStart` hook but no `stop`
+hook until its next turn, so AO reads the rendered screen instead
+(`TerminalSurfaceInspector`). Copilot draws its composer in one of two styles,
+`─` rules around `❯`, or `╻▄▄` / `┃` / `╹▀▀` blocks (what it renders inside
+AO's own terminal), above a footer. Idle is an empty composer with a footer
+that does not show `Working`; an approval or trust dialog is waiting input;
+anything else is unknown, and the switch fails closed as before.
+
+The adapter deliberately does not implement `TerminalActivityDetector` or
+`EmptyComposerDetector`. Those receive the raw output stream, where Copilot's
+cursor-positioned redraws never form a composer, so they would stall message
+delivery to a Copilot terminal.
+
 Only one Copilot process may hold a session. Loading a session that another live
 Copilot process still owns leaves the next prompt waiting with no output.
 
