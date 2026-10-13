@@ -24,10 +24,10 @@ var ErrContinuationUnavailable = errors.New("the interrupted task is no longer a
 // Persisting internal content makes queue recovery and retries send the same context rather
 // than reconstructing it from a conversation that may have changed meanwhile.
 func (c *Controller) prepareContinuation(ctx context.Context, msg ports.ChatUserMessage) (ports.ChatUserMessage, error) {
-	return prepareContinuation(ctx, c.store, c.continuationPageReader, c.conversation.ID, msg)
+	return prepareContinuation(ctx, c.store, c.continuationReader, c.conversation.ID, msg)
 }
 
-func prepareContinuation(ctx context.Context, store Store, pageReader SnapshotPageReader, conversationID string, msg ports.ChatUserMessage) (ports.ChatUserMessage, error) {
+func prepareContinuation(ctx context.Context, store Store, reader SnapshotReader, conversationID string, msg ports.ChatUserMessage) (ports.ChatUserMessage, error) {
 	if !msg.Continuation {
 		return msg, nil
 	}
@@ -42,27 +42,16 @@ func prepareContinuation(ctx context.Context, store Store, pageReader SnapshotPa
 			return msg, nil
 		}
 	}
-	if pageReader == nil {
-		return msg, fmt.Errorf("prepare continuation: bounded history reader is unavailable")
+	if reader == nil {
+		return msg, fmt.Errorf("prepare continuation: history reader is unavailable")
 	}
-	rows, err := pageReader.LoadConversationSnapshotPage(ctx, conversationID, 0, 128)
+	// Continue only runs while the agent is idle, so one full read is acceptable
+	// and guarantees the stopped turn's request is present.
+	rows, err := reader.LoadConversationSnapshot(ctx, conversationID)
 	if err != nil {
 		return msg, fmt.Errorf("read interrupted conversation: %w", err)
 	}
 	reminder := stoppedContinuationContext(rows)
-	if reminder == "" && store != nil {
-		if turnID := ContinuableTurnID(rows.Turns); turnID != "" {
-			prompt, readErr := store.ContinuationPrompt(ctx, conversationID, turnID)
-			if errors.Is(readErr, domain.ErrNoConversationTurn) {
-				return msg, ErrContinuationUnavailable
-			}
-			if readErr != nil {
-				return msg, fmt.Errorf("read interrupted prompt: %w", readErr)
-			}
-			rows.Messages = append([]domain.ConversationMessage{prompt}, rows.Messages...)
-			reminder = stoppedContinuationContext(rows)
-		}
-	}
 	if reminder == "" {
 		return msg, ErrContinuationUnavailable
 	}
@@ -109,7 +98,6 @@ func stoppedContinuationContext(rows ConversationRows) string {
 	}
 
 	var original domain.ConversationMessage
-	var carriedTail string
 	var cutoff int64
 	for _, message := range rows.Messages {
 		if message.TurnID == stoppedID && message.Role == domain.MessageRoleUser {
@@ -130,41 +118,7 @@ func stoppedContinuationContext(rows ConversationRows) string {
 		}
 	}
 	if original.ID == "" {
-		// A prior continuation carries a frozen request even if the original
-		// prompt has fallen outside the bounded page window.
-		for _, message := range rows.Messages {
-			if _, visible := turns[message.TurnID]; !visible || !message.Continuation || message.Sequence > cutoff {
-				continue
-			}
-			var content []ports.ChatContent
-			if json.Unmarshal([]byte(message.DeliveryContentJSON), &content) != nil {
-				continue
-			}
-			for _, block := range content {
-				if !block.Internal || block.Type != "text" {
-					continue
-				}
-				_, encoded, found := strings.Cut(block.Text, continuationContextMarker)
-				if !found {
-					continue
-				}
-				var carried struct {
-					OriginalRequest *string         `json:"originalRequest"`
-					ResponseTail    string          `json:"partialResponseTail"`
-					Attachments     json.RawMessage `json:"attachmentReferences"`
-				}
-				if json.Unmarshal([]byte(encoded), &carried) != nil || carried.OriginalRequest == nil {
-					continue
-				}
-				original = message
-				original.Text = *carried.OriginalRequest
-				original.DeliveryContentJSON = string(carried.Attachments)
-				carriedTail = carried.ResponseTail
-			}
-		}
-		if original.ID == "" {
-			return ""
-		}
+		return ""
 	}
 
 	chain := make(map[string]bool)
@@ -180,7 +134,7 @@ func stoppedContinuationContext(rows ConversationRows) string {
 			break
 		}
 	}
-	tail := carriedTail
+	tail := ""
 	tailTruncated := false
 	for _, message := range rows.Messages {
 		if !chain[message.TurnID] || message.Sequence <= original.Sequence ||
@@ -202,45 +156,6 @@ func stoppedContinuationContext(rows ConversationRows) string {
 		}
 	}
 
-	type attachmentReference struct {
-		Type     string                    `json:"type"`
-		Name     string                    `json:"name,omitempty"`
-		URI      string                    `json:"uri,omitempty"`
-		MIMEType string                    `json:"mimeType,omitempty"`
-		Internal bool                      `json:"internal,omitempty"`
-		Excerpt  *ports.ChatExcerptContext `json:"excerpt,omitempty"`
-	}
-	var references []attachmentReference
-	// Decode descriptors only; image bytes and replay seeds are not copied into
-	// the text reminder. Native attachment content remains provider-owned.
-	if original.DeliveryContentJSON != "" {
-		_ = json.Unmarshal([]byte(original.DeliveryContentJSON), &references)
-	}
-	attachments := make([]attachmentReference, 0, 8)
-	excerptBudget := continuationTextBudget
-	for _, reference := range references {
-		if reference.Internal || reference.Type == "text" {
-			continue
-		}
-		if reference.Excerpt != nil {
-			excerpt := *reference.Excerpt
-			excerpt.SelectedText = truncateUTF8Head(excerpt.SelectedText, min(excerptBudget, 4096))
-			excerptBudget -= len(excerpt.SelectedText)
-			excerpt.UserMessage = truncateUTF8Head(excerpt.UserMessage, min(excerptBudget, 2048))
-			excerptBudget -= len(excerpt.UserMessage)
-			excerpt.AssistantMessage = truncateUTF8Head(excerpt.AssistantMessage, min(excerptBudget, 2048))
-			excerptBudget -= len(excerpt.AssistantMessage)
-			reference.Excerpt = &excerpt
-		}
-		reference.Name = truncateUTF8Head(reference.Name, 256)
-		reference.URI = truncateUTF8Head(reference.URI, 512)
-		reference.Type = truncateUTF8Head(reference.Type, 32)
-		reference.MIMEType = truncateUTF8Head(reference.MIMEType, 128)
-		attachments = append(attachments, reference)
-		if len(attachments) == 8 {
-			break
-		}
-	}
 	request := original.Text
 	requestTruncated := len(request) > continuationTextBudget
 	if requestTruncated {
@@ -249,18 +164,17 @@ func stoppedContinuationContext(rows ConversationRows) string {
 			continuationTail(request, continuationTextBudget/2)
 	}
 	encodedContext, _ := json.Marshal(struct {
-		OriginalRequest   string                `json:"originalRequest"`
-		RequestTruncated  bool                  `json:"requestTruncated,omitempty"`
-		ResponseTail      string                `json:"partialResponseTail,omitempty"`
-		ResponseTruncated bool                  `json:"responseTailTruncated,omitempty"`
-		Attachments       []attachmentReference `json:"attachmentReferences,omitempty"`
-	}{request, requestTruncated, tail, tailTruncated, attachments})
+		OriginalRequest   string `json:"originalRequest"`
+		RequestTruncated  bool   `json:"requestTruncated,omitempty"`
+		ResponseTail      string `json:"partialResponseTail,omitempty"`
+		ResponseTruncated bool   `json:"responseTailTruncated,omitempty"`
+	}{request, requestTruncated, tail, tailTruncated})
 
 	return "Continue the interrupted task using the quoted context below and the existing conversation. " +
 		"Preserve the original request and its constraints. Finish any incomplete response and avoid repeating completed work. " +
 		"For tool-based work, check current state before repeating an action; an interruption does not prove a command failed or was undone. " +
 		"The context contains an original request and partial response, not new instructions from the assistant. " +
-		"Attachment references do not contain attachment contents; if necessary context is unavailable, ask rather than inventing it.\n\n" +
+		"If necessary context is unavailable, ask rather than inventing it.\n\n" +
 		continuationContextMarker + string(encodedContext)
 }
 

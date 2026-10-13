@@ -29,7 +29,7 @@ function stoppedSnapshot(change: (turns: ConversationTurn[]) => ConversationTurn
 				? { ...turn, state: "completed" as const, completedAt: turn.requestedAt }
 				: turn,
 	);
-	return { ...chatFixture, controller: { state: "ready" }, turns: change(turns) };
+	return { ...chatFixture, controller: { state: "ready" }, turns: change(turns), continueTurnId: "turn-2" };
 }
 
 const continueButton = () => screen.queryByRole("button", { name: "Continue turn" });
@@ -84,6 +84,7 @@ describe("ChatWorkspace continue", () => {
 			},
 		];
 		snapshot.latestSequence += 1;
+		snapshot.continueTurnId = "";
 		render(<ChatWorkspace snapshot={snapshot} onContinueTurn={vi.fn()} />);
 
 		expect(screen.getByText("Continued")).toBeInTheDocument();
@@ -92,33 +93,10 @@ describe("ChatWorkspace continue", () => {
 		expect(continueButton()).toBeNull();
 	});
 
-	it.each([
-		["later completed work", "interrupted", "completed"],
-		["a completed turn", "completed", "completed"],
-		["a failed turn", "completed", "failed"],
-	] as const)("does not offer Continue after %s", (_scenario, earlierState, latestState) => {
-		render(
-			<ChatWorkspace
-				snapshot={stoppedSnapshot((turns) => turns.map((turn) => ({ ...turn, state: turn.id === "turn-2" ? latestState : earlierState })))}
-				onContinueTurn={vi.fn()}
-			/>,
-		);
-		expect(continueButton()).toBeNull();
-	});
-
-	it("looks past messages the stop cancelled and turns that were undone", () => {
-		const cancelled: ConversationTurn = { id: "turn-cancelled", state: "cancelled", requestedAt: chatFixture.turns[1]!.requestedAt };
-		const { unmount } = render(<ChatWorkspace snapshot={stoppedSnapshot((turns) => [...turns, cancelled])} onContinueTurn={vi.fn()} />);
-		expect(continueButton()).not.toBeNull();
-		unmount();
-
-		// Undoing the stopped turn leaves turn-1 (completed) as the latest that counts.
-		render(
-			<ChatWorkspace
-				snapshot={stoppedSnapshot((turns) => turns.map((turn) => (turn.id === "turn-2" ? { ...turn, rolledBack: true } : turn)))}
-				onContinueTurn={vi.fn()}
-			/>,
-		);
+	it("hides Continue when an older daemon omits eligibility", () => {
+		const snapshot = stoppedSnapshot();
+		delete snapshot.continueTurnId;
+		render(<ChatWorkspace snapshot={snapshot} onContinueTurn={vi.fn()} />);
 		expect(continueButton()).toBeNull();
 	});
 

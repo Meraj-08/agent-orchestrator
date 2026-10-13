@@ -15,7 +15,7 @@ import (
 
 func TestPrepareContinuationReadFailureDoesNotSendWithoutContext(t *testing.T) {
 	readError := errors.New("conversation unavailable")
-	controller := Controller{continuationPageReader: SnapshotPageReaderFunc(func(context.Context, string, int64, int64) (ConversationRows, error) {
+	controller := Controller{continuationReader: SnapshotReaderFunc(func(context.Context, string) (ConversationRows, error) {
 		return ConversationRows{}, readError
 	})}
 	message := ports.ChatUserMessage{Text: "Continue from where you stopped.", Continuation: true}
@@ -131,40 +131,6 @@ func TestStoppedContinuationContextBoundsUnicodeAndOmitsPrivateActivity(t *testi
 	}
 }
 
-func TestStoppedContinuationContextIncludesOnlyAttachmentReferences(t *testing.T) {
-	rows := continuationRows()
-	rows.Messages[2].DeliveryContentJSON = `[{"type":"image","mimeType":"image/png","name":"diagram.png","data":"IMAGE_BYTES"},{"type":"resource","uri":"file:///spec.md","name":"spec.md","text":"RESOURCE_BODY"},{"type":"resource","internal":true,"uri":"ao://conversation/edit-replay","text":"OLD_REPLAY_SEED"}]`
-	reminder := stoppedContinuationContext(rows)
-	for _, want := range []string{"diagram.png", "spec.md", "file:///spec.md"} {
-		if !strings.Contains(reminder, want) {
-			t.Fatalf("context omits attachment reference %q", want)
-		}
-	}
-	for _, unwanted := range []string{"IMAGE_BYTES", "RESOURCE_BODY", "OLD_REPLAY_SEED", "edit-replay"} {
-		if strings.Contains(reminder, unwanted) {
-			t.Fatalf("context copied %q", unwanted)
-		}
-	}
-}
-
-func TestStoppedContinuationContextBoundsAttachmentMetadata(t *testing.T) {
-	rows := continuationRows()
-	metadata := strings.Repeat("界", 20000)
-	references := make([]map[string]string, 20)
-	for i := range references {
-		references[i] = map[string]string{"type": metadata, "name": metadata, "uri": metadata, "mimeType": metadata}
-	}
-	encoded, err := json.Marshal(references)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rows.Messages[2].DeliveryContentJSON = string(encoded)
-	reminder := stoppedContinuationContext(rows)
-	if !utf8.ValidString(reminder) || len(reminder) > 20*1024 {
-		t.Fatalf("attachment metadata made the reminder invalid or oversized: %d bytes", len(reminder))
-	}
-}
-
 func TestContinuableTurnIDSurvivesProviderScopeChange(t *testing.T) {
 	rows := continuationRows()
 	started := time.Now()
@@ -179,71 +145,22 @@ func TestContinuableTurnIDSurvivesProviderScopeChange(t *testing.T) {
 	}
 }
 
-func TestStoppedContinuationContextPreservesVerifiedExcerpt(t *testing.T) {
-	rows := continuationRows()
-	rows.Messages[2].Text = "Fix this"
-	rows.Messages[2].DeliveryContentJSON = `[{"type":"excerpt","excerpt":{"selectedText":"SELECTED_CODE","userMessage":"PAIRED_REQUEST","assistantMessage":"PAIRED_RESPONSE"}}]`
-	reminder := stoppedContinuationContext(rows)
-	for _, want := range []string{"SELECTED_CODE", "PAIRED_REQUEST", "PAIRED_RESPONSE"} {
-		if !strings.Contains(reminder, want) {
-			t.Fatalf("missing excerpt context %q", want)
-		}
-	}
-}
-
-func TestPrepareContinuationUsesBoundedPageAndKeepsVisibleText(t *testing.T) {
+func TestPrepareContinuationKeepsVisibleText(t *testing.T) {
 	pages := 0
 	controller := Controller{
-		continuationPageReader: SnapshotPageReaderFunc(func(_ context.Context, _ string, before, limit int64) (ConversationRows, error) {
+		continuationReader: SnapshotReaderFunc(func(context.Context, string) (ConversationRows, error) {
 			pages++
-			if before != 0 || limit != 128 {
-				t.Fatalf("unbounded page: %d/%d", before, limit)
-			}
 			return continuationRows(), nil
 		}),
 	}
 	request := ports.ChatUserMessage{Text: "Continue from where you stopped.", Continuation: true}
 	got, err := controller.prepareContinuation(context.Background(), request)
 	if err != nil || pages != 1 || got.Text != request.Text || len(got.Content) != 1 || !got.Content[0].Internal {
-		t.Fatalf("provider context leaked or full history loaded: %#v, %v", got, err)
+		t.Fatalf("provider context leaked: %#v, %v", got, err)
 	}
 	delivered := excerptDeliveryMessage(got)
 	if len(delivered.Content) != 0 || !strings.Contains(delivered.Text, "TASK_DONE") {
 		t.Fatal("text-only provider lost context")
-	}
-}
-
-func TestPrepareContinuationBoundsMissingHistoryReads(t *testing.T) {
-	pages := 0
-	controller := Controller{continuationPageReader: SnapshotPageReaderFunc(func(context.Context, string, int64, int64) (ConversationRows, error) {
-		pages++
-		rows := continuationRows()
-		rows.Messages = nil
-		rows.HasMoreBefore, rows.OldestSequence = true, int64(1000-pages*128)
-		return rows, nil
-	})}
-	if _, err := controller.prepareContinuation(context.Background(), ports.ChatUserMessage{Text: "Continue", Continuation: true}); err == nil || pages != 1 {
-		t.Fatalf("unbounded or silently context-free continuation: pages=%d err=%v", pages, err)
-	}
-}
-
-func TestStoppedContinuationContextCarriesOriginalOutsidePage(t *testing.T) {
-	rows := continuationRows()
-	reminder := stoppedContinuationContext(rows)
-	content, _ := json.Marshal([]ports.ChatContent{{Type: "text", Internal: true, Text: reminder}})
-	rows.Turns = []domain.ConversationTurn{{ID: "continued", State: domain.TurnStateInterrupted, ProviderTurnID: "p-continued"}}
-	rows.Messages = []domain.ConversationMessage{
-		{ID: "continued-user", TurnID: "continued", Sequence: 5, Role: domain.MessageRoleUser, Text: "Continue", Continuation: true, DeliveryContentJSON: string(content)},
-		{ID: "continued-answer", TurnID: "continued", Sequence: 6, Role: domain.MessageRoleAssistant, Text: "NEWEST_TAIL"},
-	}
-	got := stoppedContinuationContext(rows)
-	for _, want := range []string{"TASK_DONE", "Keep the", "NEWEST_TAIL"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("lost carried context %q: %s", want, got)
-		}
-	}
-	if strings.Count(got, "Interrupted task context (JSON):") != 1 {
-		t.Fatal("nested context")
 	}
 }
 
@@ -264,14 +181,14 @@ func TestContinuationNativeReplayMatchesDispatchedPromptWithOpaqueIDs(t *testing
 func TestPrepareContinuationRejectsStaleIntent(t *testing.T) {
 	rows := continuationRows()
 	rows.Turns[1].State = domain.TurnStateCompleted
-	controller := Controller{continuationPageReader: SnapshotPageReaderFunc(func(context.Context, string, int64, int64) (ConversationRows, error) { return rows, nil })}
+	controller := Controller{continuationReader: SnapshotReaderFunc(func(context.Context, string) (ConversationRows, error) { return rows, nil })}
 	got, err := controller.prepareContinuation(context.Background(), ports.ChatUserMessage{Text: "Continue", Continuation: true})
 	if !errors.Is(err, ErrContinuationUnavailable) || len(got.Content) != 0 {
 		t.Fatalf("stale intent started context-free work: %#v, %v", got, err)
 	}
 }
 
-func TestPrepareContinuationRequiresBoundedReader(t *testing.T) {
+func TestPrepareContinuationRequiresReader(t *testing.T) {
 	controller := Controller{}
 	message := ports.ChatUserMessage{Text: "Continue", Continuation: true}
 	if _, err := controller.prepareContinuation(context.Background(), message); err == nil {

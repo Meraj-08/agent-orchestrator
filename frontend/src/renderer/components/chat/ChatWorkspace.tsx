@@ -207,16 +207,7 @@ export const CONTINUE_STOPPED_TURN_PROMPT = "Continue from where you stopped.";
 
 /** The latest turn that still counts is one the user stopped. */
 export function continuableTurnId(snapshot: ConversationSnapshot): string {
-	if (snapshot.continueTurnId !== undefined) return snapshot.continueTurnId;
-	for (let index = snapshot.turns.length - 1; index >= 0; index -= 1) {
-		const candidate = snapshot.turns[index]!;
-		// An undone turn is gone from the agent's memory, and messages cancelled
-		// by the Stop itself were never sent; neither is the turn to continue.
-		if (candidate.rolledBack || candidate.state === "cancelled") continue;
-		if (candidate.state === "interrupted" && !candidate.startedAt && !candidate.providerTurnId) continue;
-		return candidate.state === "interrupted" ? candidate.id : "";
-	}
-	return "";
+	return snapshot.continueTurnId ?? "";
 }
 
 export interface ChatRetryControl {

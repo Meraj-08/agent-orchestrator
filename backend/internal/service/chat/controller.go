@@ -113,7 +113,6 @@ type Store interface {
 	UpdateQueuedTurnMessage(ctx context.Context, conversationID, turnID, text, contentJSON string, revision int64, now time.Time, delivery domain.ConversationQueuedEditDelivery) error
 	ReorderQueuedTurns(ctx context.Context, conversationID string, turnIDs []string) error
 
-	ContinuationPrompt(ctx context.Context, conversationID, turnID string) (domain.ConversationMessage, error)
 	RetryPrompt(ctx context.Context, conversationID, turnID string) (domain.RetryPrompt, error)
 	RetryTurnIDForSource(ctx context.Context, conversationID, sourceTurnID string) (string, bool, error)
 
@@ -203,7 +202,7 @@ type Controller struct {
 
 	conv                   ports.ChatConversation
 	store                  Store
-	continuationPageReader SnapshotPageReader
+	continuationReader     SnapshotReader
 	activity               ActivityRecorder
 	log                    *slog.Logger
 	newID                  IDFactory
@@ -363,7 +362,7 @@ func newController(
 	now Clock,
 	onAccountChanged func(domain.SessionID, string, domain.AgentHarness),
 	onCodexCapacityChanged func(domain.SessionID, string, ports.CodexCapacityObservation),
-	pageReader SnapshotPageReader,
+	reader SnapshotReader,
 ) *Controller {
 	c := &Controller{
 		sessionID:              sessionID,
@@ -373,7 +372,7 @@ func newController(
 		harness:                harness,
 		conv:                   conv,
 		store:                  store,
-		continuationPageReader: pageReader,
+		continuationReader:     reader,
 		activity:               activity,
 		log:                    log,
 		newID:                  newID,
