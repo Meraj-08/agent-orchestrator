@@ -137,7 +137,7 @@ export type ConversationLocalEcho = {
 	/** A turn was already active when this was sent, so it belongs in the queue dock, not the chat. */
 	queued?: boolean;
 	/** Excerpts are rendered inside the optimistic user message bubble. */
-	excerpts?: Pick<ChatDraftExcerptReference, "text" | "messageId" | "revision">[];
+	excerpts?: (Pick<ChatDraftExcerptReference, "text" | "messageId" | "revision"> & { conversationId?: string })[];
 	/** Filled after the daemon accepts the send, then used for exact reconciliation. */
 	turnId?: string;
 };
@@ -494,6 +494,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				text: variables.input.text,
 				continuation: variables.input.continuation,
 				excerpts: variables.input.excerpts?.map((excerpt) => ({
+					conversationId: excerpt.conversationId,
 					text: excerpt.text,
 					messageId: excerpt.messageId,
 					revision: excerpt.revision,
@@ -1693,6 +1694,7 @@ function toMessage(wire: WireMessage): ConversationMessage {
 			uri: item.uri || undefined,
 			name: item.name || undefined,
 			text: item.text || undefined,
+			sourceConversationId: item.sourceConversationId || undefined,
 			sourceMessageId: item.sourceMessageId || undefined,
 			sourceRevision: item.sourceRevision ?? undefined,
 		})),

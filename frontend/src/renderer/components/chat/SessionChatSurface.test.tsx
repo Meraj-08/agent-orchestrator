@@ -75,6 +75,20 @@ const configState = vi.hoisted(() => ({
 	options: [] as ChatConfigOption[], loaded: false, error: undefined as string | undefined,
 }));
 
+const sideMocks = vi.hoisted(() => ({
+	create: vi.fn(),
+	send: vi.fn(),
+	show: vi.fn(),
+	addReference: vi.fn(),
+	sides: [] as { hasWork: boolean }[],
+	workspaceSend: undefined as
+		| undefined
+		| ((text: string, attachments: undefined, clientMessageId: string) => Promise<void>),
+}));
+vi.mock("./IndependentSideChats", () => ({
+	useIndependentSideChats: () => ({ ...sideMocks, panel: null, activeId: "existing-side" }),
+}));
+
 const visibilityMocks = vi.hoisted(() => ({
 	presentation: vi.fn(),
 	route: vi.fn(),
@@ -83,6 +97,7 @@ const visibilityMocks = vi.hoisted(() => ({
 vi.mock("../../lib/api-client", () => ({
 	apiClient: { GET: getMock, POST: postMock },
 	getApiBaseUrl: () => "",
+	subscribeApiBaseUrl: () => () => {},
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
 }));
 
@@ -129,7 +144,9 @@ vi.mock("./ChatWorkspace", async () => {
 			configOptionError,
 			snapshot,
 			shellTarget,
+			onSend,
 		}: {
+			onSend: typeof sideMocks.workspaceSend;
 			agentInputDisabled?: boolean;
 			headerActions?: ReactNode;
 			sessionTabAction?: ReactNode;
@@ -142,6 +159,7 @@ vi.mock("./ChatWorkspace", async () => {
 			snapshot: { sessionId?: string };
 			shellTarget?: { handleId: string };
 		}) => {
+			sideMocks.workspaceSend = onSend;
 			const [mountedSessionId] = useState(snapshot.sessionId);
 			return (
 				<div>
@@ -1215,4 +1233,76 @@ describe("SessionChatSurface continuation identity", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Continue test turn" }));
 		expect(conversationCommandState.send.mock.calls[2]![0].clientMessageId).not.toBe(first.clientMessageId);
 	});
+});
+
+describe("side command routing", () => {
+	beforeEach(() => {
+		useUiStore.setState({ developerMode: true, sideChats: true });
+	});
+	afterEach(() => {
+		useUiStore.setState({ developerMode: false, sideChats: false });
+	});
+
+	it.each([
+		["side chats are off", { developerMode: true, sideChats: false }, "codex"],
+		["Developer mode is off", { developerMode: false, sideChats: true }, "codex"],
+		["the harness cannot run sides", { developerMode: true, sideChats: true }, "cursor"],
+	] as const)("sends /btw to the main chat when %s", async (_case, flags, provider) => {
+		useUiStore.setState(flags);
+		sideMocks.create.mockReset();
+		const mainSend = conversationCommandState.send;
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(
+			<Wrapper client={queryClient}>
+				<SessionChatSurface session={{ ...session, provider }} />
+			</Wrapper>,
+		);
+		await act(async () => {
+			await sideMocks.workspaceSend!("/btw what is this?", undefined, "submission-main");
+		});
+		expect(sideMocks.create).not.toHaveBeenCalled();
+		expect(mainSend).toHaveBeenCalledWith(expect.objectContaining({ text: "/btw what is this?", clientMessageId: "submission-main" }));
+	});
+
+	it.each(["btw", "side"])(
+		"/%s creates a new side for every new submission and reuses a retry key",
+		async (command) => {
+			sideMocks.create.mockReset().mockImplementation(async (_excerpt, _force, key) => ({ id: `side-${key}` }));
+			sideMocks.send.mockReset().mockResolvedValue(undefined);
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			render(
+				<Wrapper client={queryClient}>
+					<SessionChatSurface session={session} />
+				</Wrapper>,
+			);
+			await act(async () => {
+				await sideMocks.workspaceSend!(`/${command} first`, undefined, "submission-1");
+				await sideMocks.workspaceSend!(`/${command} second`, undefined, "submission-2");
+				await sideMocks.workspaceSend!(`/${command} second`, undefined, "submission-2");
+			});
+			expect(sideMocks.create.mock.calls).toEqual([
+				[undefined, true, "submission-1"],
+				[undefined, true, "submission-2"],
+				[undefined, true, "submission-2"],
+			]);
+			expect(sideMocks.send).toHaveBeenNthCalledWith(
+				1,
+				"side-submission-1",
+				"first",
+				undefined,
+				undefined,
+				true,
+				"submission-1",
+			);
+			expect(sideMocks.send).toHaveBeenNthCalledWith(
+				2,
+				"side-submission-2",
+				"second",
+				undefined,
+				undefined,
+				true,
+				"submission-2",
+			);
+		},
+	);
 });

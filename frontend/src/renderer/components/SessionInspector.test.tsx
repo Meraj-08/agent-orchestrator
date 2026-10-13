@@ -1216,6 +1216,33 @@ describe("SessionInspector Artifacts section", () => {
     );
   });
 
+  it("opens the Artifacts view from the More menu beside the tab list", async () => {
+    const onViewChange = vi.fn();
+    renderWithQuery(
+      <SessionInspector
+        onViewChange={onViewChange}
+        session={session([], {
+          artifactFiles: [artifact({ path: "notes.md", name: "notes.md", kind: "markdown" })],
+        })}
+      />,
+    );
+
+    const more = screen.getByRole("button", { name: "More" });
+    expect(screen.getByRole("tablist")).not.toContainElement(more);
+    expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
+    expect(more).not.toHaveAttribute("data-active");
+
+    await userEvent.click(more);
+    const menu = await screen.findByRole("menu");
+    expect(menu).toHaveAttribute("data-browser-native-overlay", "true");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Artifacts" }));
+
+    expect(onViewChange).toHaveBeenCalledWith("artifacts");
+    expect(await screen.findByRole("button", { name: /notes\.md/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("button", { name: "More" })).toHaveAttribute("data-active");
+  });
+
   it("does not render a feedback button on artifact rows", () => {
     renderWithQuery(
       <SessionInspector
@@ -2288,9 +2315,9 @@ describe("SessionInspector Activity section", () => {
 describe("SessionInspector tabs", () => {
   it("exposes Reviews after Summary and keeps review content out of Summary", async () => {
     mockCommonGets([], "", [reviewState(1, "needs_review")]);
-    renderWithQuery(<SessionInspector session={session([pr(1, "open")])} />);
+    renderWithQuery(<SessionInspector session={session([pr(1, "open")])} sideChatView={<div />} />);
     const tabs = screen.getAllByRole("tab").map((el) => el.textContent?.trim());
-    expect(tabs).toEqual(["Summary", "Reviews", "Browser", "Files"]);
+    expect(tabs).toEqual(["Summary", "Reviews", "Browser", "Side chat", "Files"]);
     expect(screen.queryByText("Review controls")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
@@ -4498,6 +4525,7 @@ describe("SessionInspector summary reviews", () => {
 
     await screen.findByRole("tab", { name: /Summary/ });
     expect(screen.queryByRole("tab", { name: /Reviews/ })).not.toBeInTheDocument();
+    // No side chat view from the host (side chats off or unsupported): no tab.
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual([
       "Summary",
       "Browser",

@@ -1,3 +1,4 @@
+import { MessageSquare } from "lucide-react";
 import { AppLink } from "./AppLink";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -28,14 +29,15 @@ import {
 	ArrowUpRight,
 	ChevronDown,
 	ChevronRight,
-	Files as FilesIcon,
 	GitPullRequest,
 	GitMerge,
 	Globe,
 	Info,
 	Play,
 	Loader2,
+	MoreVertical,
 	SearchCheck,
+	Shapes,
 	X,
 } from "lucide-react";
 import type { components } from "../../api/schema";
@@ -50,7 +52,10 @@ import { useOpenArtifactPreview } from "../hooks/useOpenArtifactPreview";
 import { captureRendererEvent } from "../lib/telemetry";
 import { formatTimeCompact } from "../lib/format-time";
 import { AgentAvatar } from "./AgentAvatar";
+import { SessionArtifactsView, type ArtifactOpenRequest } from "./SessionArtifactsView";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { OrchestratorChildrenSection } from "./OrchestratorChildrenSection";
+import { TopbarButton } from "./TopbarButton";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { CopyButton } from "./chat/CopyButton";
 import { ResumeAgentControl } from "./ResumeAgentControl";
@@ -116,7 +121,7 @@ export type { InspectorView } from "@aoagents/product-ui";
 
 const VIEW_DEFS: {
 	id: InspectorView;
-	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.files";
+	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.sideChat" | "inspector.files";
 	icon: ReactNode;
 }[] = [
 	{
@@ -149,6 +154,7 @@ const VIEW_DEFS: {
 			</svg>
 		),
 	},
+	{ id: "sideChat", labelKey: "inspector.sideChat", icon: <MessageSquare aria-hidden="true" /> },
 	{
 		id: "files",
 		labelKey: "inspector.files",
@@ -189,6 +195,8 @@ export const SessionInspector = memo(function SessionInspector({
 	browserAnnotationQueue,
 	isInspectorVisible = true,
 	onToggleBrowserPopOut,
+	artifactRequest,
+	onArtifactRequestConsumed,
 	onOpenArtifact,
 	onOpenFiles,
 	onOpenReviewFile,
@@ -196,6 +204,7 @@ export const SessionInspector = memo(function SessionInspector({
 	onWorkerMessageSent,
 	filesView,
 	browserView,
+	sideChatView,
 	view: viewProp,
 	onViewChange,
 }: {
@@ -207,6 +216,9 @@ export const SessionInspector = memo(function SessionInspector({
 	browserAnnotationQueue?: BrowserAnnotationQueueModel;
 	isInspectorVisible?: boolean;
 	onToggleBrowserPopOut?: (next: boolean) => void;
+	/** The artifact the Artifacts view should show, e.g. one clicked in the Summary. */
+	artifactRequest?: ArtifactOpenRequest | null;
+	onArtifactRequestConsumed?: (key: number) => void;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
 	onOpenFiles?: () => void;
 	onOpenReviewFile?: (target: { line?: number; path: string }) => void;
@@ -214,6 +226,7 @@ export const SessionInspector = memo(function SessionInspector({
 	onWorkerMessageSent?: () => void;
 	filesView?: ReactNode;
 	browserView?: BrowserViewModel;
+	sideChatView?: ReactNode;
 	/** Controlled active tab. Omit to let the inspector own its own selection. */
 	view?: InspectorView;
 	onViewChange?: (view: InspectorView) => void;
@@ -257,8 +270,11 @@ export const SessionInspector = memo(function SessionInspector({
 	// Keep the shell on a real, visible tab instead of rendering an empty, unlabelled body.
 	const reviewsAvailable = reviewsTabVisible(session);
 	const availableViewDefs = onlyBrowser ? VIEW_DEFS.filter((entry) => entry.id === "browser")
-		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews"));
-	const view: InspectorView = onlyBrowser ? "browser" : availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
+		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews")
+			// The host passes a side chat view only where side chats can run.
+			&& (entry.id !== "sideChat" || sideChatView !== undefined));
+	// Artifacts has no tab; the overflow menu opens it.
+	const view: InspectorView = onlyBrowser ? "browser" : requestedView === "artifacts" && session ? "artifacts" : availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
 	useEffect(() => {
 		if (view === requestedView) return;
 		setInternalView(view);
@@ -286,8 +302,14 @@ export const SessionInspector = memo(function SessionInspector({
 		// layout/flex entirely — it exists purely as a CSS selector anchor.
 		<div className="session-inspector contents">
 			<SessionInspectorShellView
+				sideChatView={sideChatView ?? <p className="p-4 text-xs text-muted-foreground">{t("sideChat.unavailable")}</p>}
 				activeView={view}
 				ariaLabel={t("inspector.aria")}
+				artifactsView={
+					session ? (
+						<SessionArtifactsView hostId={hostId} key={sessionUiKey(session.id, hostId)} onRequestConsumed={onArtifactRequestConsumed} request={artifactRequest} session={session} />
+					) : undefined
+				}
 				browserPoppedOut={browserPoppedOut}
 				browserView={
 					session && (!hostId || browserView) ? (
@@ -310,19 +332,39 @@ export const SessionInspector = memo(function SessionInspector({
 					) : undefined
 				}
 						headerActions={
-							view === "browser" && !browserPoppedOut ? (
-								<>
+							<>
+								{view === "browser" && !browserPoppedOut ? (
 									<div className="browser-panel__topbar-host min-w-0 flex-1" ref={setBrowserTopbarHost} />
-									<span aria-hidden="true" className="session-inspector-actions-spacer" />
-								</>
-							) : view === "files" && filesView ? (
-								<>
+								) : view === "files" && filesView ? (
 									<div className="files-panel__topbar-host min-w-0 flex-1" ref={setFilesTopbarHost} />
+								) : null}
+								{/* The ⋮ sits just left of the pinned inspector toggle in every view. */}
+								<div className="session-inspector__trailing flex shrink-0 items-center">
+									{session && !onlyBrowser ? (
+										<DropdownMenu>
+											<DropdownMenuTrigger asChild>
+												<TopbarButton
+													aria-label={t("inspector.more")}
+													// -mr-2 pulls it into the spacer's lead so it sits the same 4px from the toggle as the toggle from the bell.
+													className="-mr-2 data-[active]:bg-interactive-active data-[active]:text-foreground data-[state=open]:bg-interactive-active data-[state=open]:text-foreground"
+													data-active={view === "artifacts" ? "" : undefined}
+													title={t("inspector.more")}
+													variant="icon"
+												>
+													<MoreVertical aria-hidden="true" className="size-icon-md" />
+												</TopbarButton>
+											</DropdownMenuTrigger>
+											<DropdownMenuContent align="end" className="min-w-44" data-browser-native-overlay="true">
+												<DropdownMenuItem onSelect={() => setView("artifacts")}>
+													<Shapes aria-hidden="true" />
+													{t("artifacts.title")}
+												</DropdownMenuItem>
+											</DropdownMenuContent>
+										</DropdownMenu>
+									) : null}
 									<span aria-hidden="true" className="session-inspector-actions-spacer" />
-								</>
-							) : (
-								<span aria-hidden="true" className="session-inspector-actions-spacer" />
-							)
+								</div>
+							</>
 						}
 				isVisible={isInspectorVisible}
 				loadingText={session ? undefined : t("inspector.loadingSession")}
@@ -1458,9 +1500,8 @@ function PRSummaryCard({
 
 /**
  * One row in the Summary panel's Artifacts list. HTML artifacts open in the
- * Browser panel; markdown/file artifacts open in a dedicated read-only
- * viewer in the Files inspector, since artifact files live outside the git
- * workspace and the workspace-diff Files flow can't resolve them.
+ * Browser panel; markdown/file artifacts open in the inspector's Artifacts view,
+ * since artifact files live outside the git workspace.
  */
 function ArtifactSummaryCard({
 	artifact,
@@ -1489,7 +1530,7 @@ function ArtifactSummaryCard({
 				{artifact.kind === "html" ? (
 					<Globe aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
 				) : (
-					<FilesIcon aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
+					<Shapes aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
 				)}
 				<span className="min-w-0 flex-1 truncate">{artifact.name}</span>
 			</button>
