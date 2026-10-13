@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -135,6 +136,78 @@ func TestPermissionConfigOptionsLabelsOpenCodeTiers(t *testing.T) {
 					t.Fatal("mutated provider catalog")
 				}
 			})
+		}
+	}
+}
+
+// Copilot's catalog exactly as copilot --acp 1.0.93 advertises it.
+func copilotCatalog() []ports.ChatConfigOption {
+	const uri = "https://agentclientprotocol.com/protocol/session-modes#"
+	return []ports.ChatConfigOption{
+		{ID: "mode", Name: "Mode", Category: "mode", Type: ports.ChatConfigOptionSelect,
+			Current: ports.ChatConfigOptionValue{Select: uri + "agent"},
+			Choices: []ports.ChatConfigOptionChoice{
+				{Value: uri + "agent", Name: "Agent"}, {Value: uri + "plan", Name: "Plan"},
+				{Value: uri + "autopilot", Name: "Autopilot"},
+			}},
+		{ID: "agent", Name: "Agent", Type: ports.ChatConfigOptionSelect,
+			Choices: []ports.ChatConfigOptionChoice{{Value: ""}, {Value: "ao-s1"}}},
+		{ID: "allow_all", Name: "Allow all", Type: ports.ChatConfigOptionSelect,
+			Current: ports.ChatConfigOptionValue{Select: "off"},
+			Choices: []ports.ChatConfigOptionChoice{{Value: "on"}, {Value: "off"}}},
+	}
+}
+
+func TestPermissionConfigOptionsHidesCopilotApprovalBypasses(t *testing.T) {
+	got := permissionConfigOptions(domain.HarnessCopilot, copilotCatalog())
+	ids := map[string]ports.ChatConfigOption{}
+	for _, option := range got {
+		ids[option.ID] = option
+	}
+	if _, ok := ids["allow_all"]; ok {
+		t.Error("allow_all is driven by AO's approval mode and must not be a composer control")
+	}
+	mode, ok := ids["mode"]
+	if !ok {
+		t.Fatal("mode option dropped; Agent and Plan are execution modes")
+	}
+	var names []string
+	for _, choice := range mode.Choices {
+		names = append(names, choice.Name)
+		if choice.PermissionMode != "" {
+			t.Errorf("%s annotated as approval mode %q", choice.Name, choice.PermissionMode)
+		}
+	}
+	if len(names) != 2 || names[0] != "Agent" || names[1] != "Plan" {
+		t.Errorf("mode choices = %v, want [Agent Plan]", names)
+	}
+	if _, ok := ids["agent"]; !ok {
+		t.Error("agent option dropped from the catalog")
+	}
+	if len(permissionConfigOptions(domain.HarnessCodex, copilotCatalog())) != 3 {
+		t.Error("another harness lost options to the Copilot filter")
+	}
+}
+
+func TestCopilotConfigOptionAllowed(t *testing.T) {
+	const uri = "https://agentclientprotocol.com/protocol/session-modes#"
+	for _, tc := range []struct {
+		id, value string
+		ok        bool
+	}{
+		{"allow_all", "on", false},
+		{"allow_all", "off", false},
+		{"mode", uri + "autopilot", false},
+		{"mode", uri + "plan", true},
+		{"mode", uri + "agent", true},
+		{"model", "gpt-5.5", true},
+	} {
+		err := copilotConfigOptionAllowed(tc.id, ports.ChatConfigOptionValue{Select: tc.value})
+		if tc.ok && err != nil {
+			t.Errorf("%s=%s: %v", tc.id, tc.value, err)
+		}
+		if !tc.ok && !errors.Is(err, ports.ErrChatConfigOptionInvalid) {
+			t.Errorf("%s=%s: err = %v, want ErrChatConfigOptionInvalid", tc.id, tc.value, err)
 		}
 	}
 }

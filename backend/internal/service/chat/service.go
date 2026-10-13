@@ -2193,6 +2193,11 @@ func (s *Service) SetConfigOption(
 	if !ok {
 		return nil, ErrConfigOptionsUnsupported
 	}
+	if record.Harness == domain.HarnessCopilot {
+		if err := copilotConfigOptionAllowed(configID, value); err != nil {
+			return nil, err
+		}
+	}
 	controller.configMu.Lock()
 	defer controller.configMu.Unlock()
 	previous := controller.Settings()
@@ -2472,6 +2477,9 @@ func (s *Service) StopChat(ctx context.Context, id domain.SessionID) error {
 // permissionConfigOptions annotates only provider controls whose semantics are
 // known. In particular, plan and dontAsk are not AO approval policies.
 func permissionConfigOptions(harness domain.AgentHarness, options []ports.ChatConfigOption) []ports.ChatConfigOption {
+	if harness == domain.HarnessCopilot {
+		options = copilotComposerOptions(options)
+	}
 	out := append([]ports.ChatConfigOption(nil), options...)
 	for i := range out {
 		out[i].Choices = append([]ports.ChatConfigOptionChoice(nil), out[i].Choices...)
@@ -2519,6 +2527,50 @@ func permissionConfigOptions(harness domain.AgentHarness, options []ports.ChatCo
 		}
 	}
 	return out
+}
+
+// copilotComposerOptions removes the Copilot controls that would bypass AO's
+// approval state. AO drives "allow_all" from the session's approval mode, and
+// Autopilot turns allow-all on inside Copilot without AO knowing, so neither
+// is offered as a provider control. Agent and Plan remain execution modes.
+func copilotComposerOptions(options []ports.ChatConfigOption) []ports.ChatConfigOption {
+	out := make([]ports.ChatConfigOption, 0, len(options))
+	for _, option := range options {
+		if option.ID == copilotAllowAllOption {
+			continue
+		}
+		if option.ID == "mode" {
+			choices := make([]ports.ChatConfigOptionChoice, 0, len(option.Choices))
+			for _, choice := range option.Choices {
+				if !isCopilotAutopilot(choice.Value) {
+					choices = append(choices, choice)
+				}
+			}
+			option.Choices = choices
+		}
+		out = append(out, option)
+	}
+	return out
+}
+
+// copilotConfigOptionAllowed refuses the Copilot settings AO owns or hides.
+func copilotConfigOptionAllowed(configID string, value ports.ChatConfigOptionValue) error {
+	if configID == copilotAllowAllOption {
+		return fmt.Errorf("%w: Copilot's allow_all follows the session's approval mode", ports.ErrChatConfigOptionInvalid)
+	}
+	if configID == "mode" && isCopilotAutopilot(value.Select) {
+		return fmt.Errorf("%w: Copilot Autopilot bypasses AO approvals; choose bypass permissions instead", ports.ErrChatConfigOptionInvalid)
+	}
+	return nil
+}
+
+const copilotAllowAllOption = "allow_all"
+
+// isCopilotAutopilot matches Copilot's Autopilot mode id, which it reports as
+// the ACP session-modes URI ending in #autopilot.
+func isCopilotAutopilot(value string) bool {
+	value = strings.TrimSpace(value)
+	return value == "autopilot" || strings.HasSuffix(value, "#autopilot")
 }
 
 func commandCodeApprovalMode(value string) (domain.PermissionMode, bool) {
