@@ -198,6 +198,9 @@ func TestResolverDefaultsToTheUsersGeminiHome(t *testing.T) {
 	if got, _ := r.geminiHome(); got != "/elsewhere" {
 		t.Errorf("geminiHome with GEMINI_HOME = %q", got)
 	}
+	if got, _ := r.geminiHomeFor(map[string]string{"GEMINI_HOME": "/session/home"}); got != "/session/home" {
+		t.Errorf("geminiHomeFor(session env) = %q", got)
+	}
 }
 
 func TestProbeReportsAMissingServerAsUnavailable(t *testing.T) {
@@ -249,8 +252,8 @@ func TestAuthBootstrapAuthenticatesOnlyAnAlreadySignedInUser(t *testing.T) {
 				writeFile(t, filepath.Join(home, "antigravity-acp", "settings.json"), tt.settings)
 			}
 			var calls []string
-			b := newAuthBootstrap(func() (string, error) { return home, nil })
-			err := b.bootstrap(context.Background(), tt.init, func(_ context.Context, method string) error {
+			b := newAuthBootstrap(func(map[string]string) (string, error) { return home, nil })
+			err := b.bootstrap(context.Background(), tt.init, nil, func(_ context.Context, method string) error {
 				calls = append(calls, method)
 				return nil
 			})
@@ -264,15 +267,37 @@ func TestAuthBootstrapAuthenticatesOnlyAnAlreadySignedInUser(t *testing.T) {
 	}
 }
 
+func TestAuthBootstrapChecksTheSessionGeminiHome(t *testing.T) {
+	daemonHome := t.TempDir()
+	sessionHome := t.TempDir()
+	writeFile(t, filepath.Join(sessionHome, "google_accounts.json"), `{"active":"session@example.com"}`)
+	r := testResolver(t, map[string]string{"GEMINI_HOME": daemonHome})
+	r.homeDir = func() (string, error) { return daemonHome, nil }
+	init := acpsdk.InitializeResponse{AuthMethods: []acpsdk.AuthMethod{
+		{Agent: &acpsdk.AuthMethodAgent{Id: "oauth-personal", Name: "Log in with Google"}},
+	}}
+	calls := 0
+	b := newAuthBootstrap(r.geminiHomeFor)
+	if err := b.bootstrap(context.Background(), init, map[string]string{"GEMINI_HOME": sessionHome}, func(_ context.Context, _ string) error {
+		calls++
+		return nil
+	}); err != nil {
+		t.Fatalf("bootstrap = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("authenticate calls = %d, want session sign-in to be detected", calls)
+	}
+}
+
 func TestAuthBootstrapBoundsAndReportsAFailedAuthenticate(t *testing.T) {
 	home := t.TempDir()
 	writeFile(t, filepath.Join(home, "google_accounts.json"), `{"active":"me@example.com"}`)
 	init := acpsdk.InitializeResponse{AuthMethods: []acpsdk.AuthMethod{
 		{Agent: &acpsdk.AuthMethodAgent{Id: "oauth-personal", Name: "Log in with Google"}},
 	}}
-	b := newAuthBootstrap(func() (string, error) { return home, nil })
+	b := newAuthBootstrap(func(map[string]string) (string, error) { return home, nil })
 	b.timeout = 50 * time.Millisecond
-	err := b.bootstrap(context.Background(), init, func(ctx context.Context, _ string) error {
+	err := b.bootstrap(context.Background(), init, nil, func(ctx context.Context, _ string) error {
 		<-ctx.Done()
 		return ctx.Err()
 	})
@@ -334,5 +359,29 @@ func writeFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDriverResumeBridgesTerminalDatabaseToACP(t *testing.T) {
+	geminiHome := t.TempDir()
+	cliDB := filepath.Join(geminiHome, "antigravity-cli", "conversations", "resumed-id.db")
+	writeFile(t, cliDB, "sqlite-content-from-cli")
+
+	d := New(nil, nil)
+	// Resume will attempt to bridge before connecting to the ACP server. Even though
+	// ACP server connection fails in unit test (no binary), the bridge must have executed.
+	_, _ = d.Resume(context.Background(), ports.ChatResumeConfig{
+		ProviderConversationID: "resumed-id",
+		WorkspacePath:          t.TempDir(),
+		Env:                    map[string]string{"GEMINI_HOME": geminiHome},
+	})
+
+	acpDB := filepath.Join(geminiHome, "antigravity-acp", "conversations", "resumed-id.db")
+	data, err := os.ReadFile(acpDB)
+	if err != nil {
+		t.Fatalf("expected bridged acp db file %s to exist: %v", acpDB, err)
+	}
+	if string(data) != "sqlite-content-from-cli" {
+		t.Fatalf("bridged data = %q, want %q", string(data), "sqlite-content-from-cli")
 	}
 }

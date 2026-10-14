@@ -513,6 +513,24 @@ func (m *Manager) runInterfaceTransition(
 		fail("TRANSITION_STATE_FAILED", err)
 		return
 	}
+	if bridge, ok := m.agents.Agent(rec.Harness); ok && transition.NativeConversationID != "" {
+		if storageBridge, supported := bridge.(ports.AgentInterfaceHandoffStorageBridge); supported {
+			project, projectErr := m.loadProject(ctx, rec.ProjectID)
+			if projectErr != nil {
+				fail("HANDOFF_STORAGE_BRIDGE_FAILED", projectErr)
+				return
+			}
+			env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
+			m.augmentAgentRuntimeEnv(bridge, env)
+			if bridgeErr := storageBridge.PrepareInterfaceHandoffStorage(ctx, ports.SessionRef{
+				ID: string(rec.ID), WorkspacePath: rec.Metadata.WorkspacePath,
+				Metadata: map[string]string{ports.MetadataKeyAgentSessionID: transition.NativeConversationID},
+			}, transition.SourceMode, transition.TargetMode, transition.NativeConversationID, env); bridgeErr != nil {
+				fail("HANDOFF_STORAGE_BRIDGE_FAILED", bridgeErr)
+				return
+			}
+		}
+	}
 	if m.lcm == nil {
 		fail("LIFECYCLE_UNAVAILABLE", fmt.Errorf("lifecycle manager is unavailable"))
 		return
@@ -999,11 +1017,11 @@ func (m *Manager) prepareSourceHandoff(
 				observation := surfaceInspector.InspectTerminalSurface(output)
 				switch {
 				case observation.Work == ports.TerminalSurfaceWorkWaitingInput,
-					observation.Work == ports.TerminalSurfaceWorkBlocked:
-					// Provider-owned approval and input requests are not composer
-					// drafts. The terminal input gate is closed while draining, so
-					// waiting here would also make the request impossible to answer.
-					// Abort the drain and return control to the source interface.
+					observation.Work == ports.TerminalSurfaceWorkBlocked,
+					observation.Composer == ports.TerminalComposerDraft:
+					// Provider-owned requests and unsent composer drafts must stay
+					// with the source interface. The terminal input gate is closed
+					// while draining, so abort and return control to the source.
 					if cancelProbe != nil {
 						cancelProbe()
 					}

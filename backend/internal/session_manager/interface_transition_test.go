@@ -2,6 +2,7 @@ package sessionmanager
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"maps"
@@ -13,11 +14,13 @@ import (
 	"testing"
 	"time"
 
+	agyagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agy"
 	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	_ "modernc.org/sqlite"
 )
 
 type transitionStore struct {
@@ -397,7 +400,7 @@ func (transitionSurfaceAgent) InspectTerminalSurface(output string) ports.Termin
 type transitionSurfaceDetectorAgent struct{ transitionSurfaceAgent }
 
 func (transitionSurfaceDetectorAgent) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
-	if output == idleTerminalOutput || output == draftTerminalOutput {
+	if output == idleTerminalOutput {
 		return domain.ActivityIdle, true
 	}
 	return "", false
@@ -918,6 +921,45 @@ func TestInterfaceTransitionStatusAllowsSwitchToTUIWhenChatUnsupported(t *testin
 	}
 	if status.ReasonCode == "CHAT_UNSUPPORTED" {
 		t.Fatal("switching back to TUI should not report CHAT_UNSUPPORTED")
+	}
+}
+
+func TestAgyAdapterEnablesInterfaceTransitionStatusInBothDirections(t *testing.T) {
+	for _, mode := range []domain.SessionMode{domain.SessionModeChat, domain.SessionModeTUI} {
+		t.Run(string(mode), func(t *testing.T) {
+			manager, store, _, _, _ := newTransitionManager(t, mode)
+			geminiHome := t.TempDir()
+			store.projects["proj"] = domain.ProjectRecord{
+				ID: "proj", Path: "/repo", Config: domain.ProjectConfig{Env: map[string]string{"GEMINI_HOME": geminiHome}},
+			}
+			conversationDB := filepath.Join(geminiHome, "antigravity-acp", "conversations", "native-1.db")
+			if err := os.MkdirAll(filepath.Dir(conversationDB), 0700); err != nil {
+				t.Fatal(err)
+			}
+			db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(conversationDB))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec("CREATE TABLE steps (id INTEGER PRIMARY KEY); INSERT INTO steps DEFAULT VALUES"); err != nil {
+				_ = db.Close()
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			rec := store.sessions["session-1"]
+			rec.Harness = domain.HarnessAgy
+			store.sessions["session-1"] = rec
+			manager.agents = singleAgent{agent: agyagent.New()}
+
+			status, err := manager.InterfaceTransitionStatus(context.Background(), "session-1")
+			if err != nil {
+				t.Fatalf("InterfaceTransitionStatus: %v", err)
+			}
+			if !status.Supported {
+				t.Fatalf("status = %+v, want supported handoff to %s", status, status.TargetMode)
+			}
+		})
 	}
 }
 
@@ -1707,7 +1749,7 @@ func TestInterfaceTransitionTUIToChatDrainsAVisibleIdleComposerAfterNonSubmittin
 	}
 }
 
-func TestInterfaceTransitionTUIToChatSwitchesPastAVisibleDraft(t *testing.T) {
+func TestInterfaceTransitionTUIToChatPreservesVisibleDraft(t *testing.T) {
 	manager, store, runtime, _, _ := newTransitionManager(t, domain.SessionModeTUI)
 	useFastInterfaceTransitionTimings(manager)
 	manager.agents = singleAgent{agent: transitionSurfaceAgent{}}
@@ -1730,11 +1772,11 @@ func TestInterfaceTransitionTUIToChatSwitchesPastAVisibleDraft(t *testing.T) {
 		t.Fatal(err)
 	}
 	settled := awaitTransition(t, store, transition.ID)
-	if settled.Phase != domain.SessionInterfaceTransitionCompleted {
-		t.Fatalf("transition = %+v, want completed despite a visible draft", settled)
+	if settled.Phase != domain.SessionInterfaceTransitionFailed || settled.ErrorCode != "DRAIN_DECISION_PENDING" {
+		t.Fatalf("transition = %+v, want failed DRAIN_DECISION_PENDING", settled)
 	}
-	if runtime.destroyed != 1 {
-		t.Fatalf("source runtime destroyed %d times, want 1", runtime.destroyed)
+	if runtime.destroyed != 0 {
+		t.Fatalf("source runtime destroyed %d times, want 0", runtime.destroyed)
 	}
 }
 
@@ -2007,7 +2049,7 @@ func TestInterfaceTransitionTUIToChatFallsBackForARecoveredHostWithoutStyledOutp
 	}
 }
 
-func TestInterfaceTransitionTUIToChatUnstyledFallbackSwitchesPastAnIdleDraft(t *testing.T) {
+func TestInterfaceTransitionTUIToChatUnstyledFallbackPreservesIdleDraft(t *testing.T) {
 	manager, store, runtime, _, _ := newTransitionManager(t, domain.SessionModeTUI)
 	useFastInterfaceTransitionTimings(manager)
 	manager.agents = singleAgent{agent: transitionSurfaceDetectorAgent{}}
@@ -2028,8 +2070,11 @@ func TestInterfaceTransitionTUIToChatUnstyledFallbackSwitchesPastAnIdleDraft(t *
 		t.Fatal(err)
 	}
 	settled := awaitTransition(t, store, transition.ID)
-	if settled.Phase != domain.SessionInterfaceTransitionCompleted {
-		t.Fatalf("transition = %+v, want completed despite an idle draft", settled)
+	if settled.Phase != domain.SessionInterfaceTransitionFailed {
+		t.Fatalf("transition = %+v, want failed while an idle draft is visible", settled)
+	}
+	if runtime.destroyed != 0 {
+		t.Fatalf("source runtime destroyed %d times, want 0", runtime.destroyed)
 	}
 }
 

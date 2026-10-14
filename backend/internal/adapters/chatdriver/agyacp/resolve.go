@@ -118,7 +118,17 @@ func (r resolver) harnessPath(server string) string {
 
 // geminiHome is where Antigravity keeps its settings and login state.
 func (r resolver) geminiHome() (string, error) {
-	if dir := strings.TrimSpace(r.getenv("GEMINI_HOME")); dir != "" {
+	return r.geminiHomeFor(nil)
+}
+
+// geminiHomeFor resolves the same home directory passed to the provider. A
+// session can override GEMINI_HOME independently of the daemon environment.
+func (r resolver) geminiHomeFor(env map[string]string) (string, error) {
+	dir := strings.TrimSpace(env["GEMINI_HOME"])
+	if dir == "" {
+		dir = strings.TrimSpace(r.getenv("GEMINI_HOME"))
+	}
+	if dir != "" {
 		return dir, nil
 	}
 	home, err := r.homeDir()

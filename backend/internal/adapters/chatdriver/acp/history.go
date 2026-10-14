@@ -284,11 +284,6 @@ func (c *conversation) captureHistoryUserChunk(chunk *acpsdk.SessionUpdateUserMe
 	if messageID == "" {
 		if c.history.pendingUserID != "" {
 			messageID = c.history.pendingUserID
-		} else if c.history.turnUserID != "" && c.history.pendingUserText == "" {
-			// An absent message id cannot describe a reliable boundary. Keep
-			// contiguous chunks together; conforming agents (including Claude) send
-			// stable UUIDs, so this is only a compatibility fallback.
-			messageID = c.history.turnUserID
 		} else {
 			c.history.fallbackID++
 			messageID = fmt.Sprintf("user-%d", c.history.fallbackID)

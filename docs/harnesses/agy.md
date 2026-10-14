@@ -7,6 +7,16 @@ Agy runs in two AO modes:
 - **Chat:** AO launches Google's **Antigravity ACP server** and talks to it over
   the Agent Client Protocol (`adapters/chatdriver/agyacp`).
 
+The Agy CLI and ACP server use the same native conversation UUID, but persist
+the SQLite file under separate directories: the ACP server uses
+`GEMINI_HOME/antigravity-acp/conversations`, while the CLI uses
+`GEMINI_HOME/antigravity-cli/conversations`. After AO stops the source
+controller, it copies the database and SQLite sidecars, metadata, and brain
+files into the target directory. It resolves the per-session `GEMINI_HOME`
+before falling back to the daemon environment or `~/.gemini`; bridge failures
+fail the transition before the target controller starts. Antigravity's
+persisted `steps` table is also checked before AO offers a history handoff.
+
 The `agy` CLI has no ACP mode. Its machine interface is headless
 `--output-format stream-json`, which cannot prompt for approvals. Google
 publishes a separate ACP server, `agy_acp_server`, through the

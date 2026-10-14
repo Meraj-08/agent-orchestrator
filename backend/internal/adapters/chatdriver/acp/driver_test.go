@@ -1353,7 +1353,10 @@ func TestACPDriverRunsAfterInitializeBeforeOpeningSession(t *testing.T) {
 		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
 		Probe:        func(context.Context) error { return nil },
 		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
-		AfterInitialize: func(ctx context.Context, conn *acpsdk.ClientSideConnection, _ acpsdk.InitializeResponse) error {
+		AfterInitialize: func(ctx context.Context, conn *acpsdk.ClientSideConnection, _ acpsdk.InitializeResponse, launchCfg LaunchConfig) error {
+			if launchCfg.Env["GEMINI_HOME"] != "/session/gemini" {
+				t.Errorf("AfterInitialize environment = %v", launchCfg.Env)
+			}
 			agent.mu.Lock()
 			opened := agent.newParams.Cwd != ""
 			agent.mu.Unlock()
@@ -1366,7 +1369,9 @@ func TestACPDriverRunsAfterInitializeBeforeOpeningSession(t *testing.T) {
 	}, nil)
 	driver.useTestProcess(fakeSpawn(agent))
 
-	conversation, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	conversation, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), Env: map[string]string{"GEMINI_HOME": "/session/gemini"},
+	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -1388,7 +1393,7 @@ func TestACPDriverAfterInitializeFailureStopsStart(t *testing.T) {
 		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
 		Probe:        func(context.Context) error { return nil },
 		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
-		AfterInitialize: func(context.Context, *acpsdk.ClientSideConnection, acpsdk.InitializeResponse) error {
+		AfterInitialize: func(context.Context, *acpsdk.ClientSideConnection, acpsdk.InitializeResponse, LaunchConfig) error {
 			return &acpsdk.RequestError{Code: -32000, Message: "Authentication required"}
 		},
 	}, nil)

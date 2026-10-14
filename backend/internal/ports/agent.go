@@ -206,6 +206,19 @@ type AgentInterfaceHandoffHistoryProbe interface {
 	) (bool, error)
 }
 
+// AgentInterfaceHandoffStorageBridge is an OPTIONAL capability for adapters
+// whose native conversation files live in interface-specific storage roots.
+// Session Manager calls it only after the source controller is stopped.
+type AgentInterfaceHandoffStorageBridge interface {
+	PrepareInterfaceHandoffStorage(
+		ctx context.Context,
+		session SessionRef,
+		from, to domain.SessionMode,
+		nativeConversationID string,
+		env map[string]string,
+	) error
+}
+
 // ModelSelectionMode tells clients how to render an agent's model control.
 type ModelSelectionMode string
 
