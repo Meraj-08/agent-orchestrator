@@ -68,7 +68,7 @@ func fullSnapshotReader(st *sqlite.Store) chatsvc.SnapshotReader {
 			return chatsvc.ConversationRows{}, err
 		}
 		return chatsvc.ConversationRows{
-			Conversation: rows.Conversation, Turns: rows.Turns,
+			Conversation: rows.Conversation, ActiveBranch: rows.ActiveBranch, Turns: rows.Turns,
 			Messages: rows.Messages, Activities: rows.Activities,
 			BranchPoints: rows.BranchPoints, BranchedFromEarlierMessage: rows.BranchedFromEarlierMessage,
 		}, nil

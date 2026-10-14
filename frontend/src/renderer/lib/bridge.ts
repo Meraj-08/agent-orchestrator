@@ -87,6 +87,9 @@ export const aoBridge: AoBridge =
 			open: async () => {
 				throw new Error("Desktop app is required to open a workspace.");
 			},
+			openArtifacts: async () => {
+				throw new Error("Desktop app is required to open artifacts.");
+			},
 			copyWorkspacePath: async () => {
 				throw new Error("Desktop app is required to copy a workspace path.");
 			},
@@ -265,6 +268,12 @@ export const aoBridge: AoBridge =
 		appState: {
 			getMigration: async () => ({ status: "pending" }),
 			setMigration: async () => undefined,
+		},
+		cliLink: {
+			setEnabled: async () => undefined,
+			inspect: async () => ({ ok: false as const, code: "unsupported" as const, message: "The desktop app is required to link the global ao command." }),
+			link: async () => ({ ok: false as const, code: "unsupported" as const, message: "The desktop app is required to link the global ao command." }),
+			unlink: async () => ({ ok: false as const, code: "unsupported" as const, message: "The desktop app is required to link the global ao command." }),
 		},
 		updateSettings: {
 			get: async () => ({ enabled: false, channel: "latest", nightlyAck: false, feature: null, macDifferentialUpdates: false }),
