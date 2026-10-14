@@ -228,11 +228,12 @@ func (c *copilotTestConversation) SetConfigOption(_ context.Context, id string, 
 	if c.setErr != nil {
 		return nil, c.setErr
 	}
-	if !(id == "mode" && c.retainMode) {
-		for i := range c.options {
-			if c.options[i].ID == id {
-				c.options[i].Current = value
-			}
+	if id == "mode" && c.retainMode {
+		return append([]ports.ChatConfigOption(nil), c.options...), nil
+	}
+	for i := range c.options {
+		if c.options[i].ID == id {
+			c.options[i].Current = value
 		}
 	}
 	return append([]ports.ChatConfigOption(nil), c.options...), nil
