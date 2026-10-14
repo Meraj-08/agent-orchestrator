@@ -164,10 +164,10 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 }
 
 // NativeConversationExists reports whether Antigravity has a persisted
-// conversation database in either interface's storage root.
+// conversation database in the source interface's storage root.
 func (p *Plugin) NativeConversationExists(
 	ctx context.Context,
-	_ ports.SessionRef,
+	session ports.SessionRef,
 	nativeConversationID string,
 	env map[string]string,
 ) (bool, error) {
@@ -182,7 +182,15 @@ func (p *Plugin) NativeConversationExists(
 	if err != nil {
 		return false, err
 	}
-	for _, modeDir := range []string{"antigravity-acp", "antigravity-cli"} {
+	modeDirs := []string{"antigravity-acp", "antigravity-cli"}
+	if rawMode := session.Metadata[ports.MetadataKeySessionMode]; rawMode != "" {
+		if mode := domain.NormalizeSessionMode(domain.SessionMode(rawMode)); mode == domain.SessionModeChat {
+			modeDirs = []string{"antigravity-acp"}
+		} else if mode == domain.SessionModeTUI {
+			modeDirs = []string{"antigravity-cli"}
+		}
+	}
+	for _, modeDir := range modeDirs {
 		path := filepath.Join(home, modeDir, "conversations", id+".db")
 		info, statErr := os.Stat(path)
 		if statErr == nil && info.Mode().IsRegular() && info.Size() > 0 {

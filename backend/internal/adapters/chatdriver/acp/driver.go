@@ -45,6 +45,7 @@ type LaunchConfig struct {
 	Model           string
 	Permissions     ports.PermissionMode
 	SystemPrompt    string
+	HasPriorTurns   bool
 	ProviderScopeID string
 }
 
@@ -387,6 +388,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		Model: cfg.Model, Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
 		ProviderScopeID: cfg.ProviderScopeID,
 		ReconnectOnly:   cfg.ReconnectOnly,
+		HasPriorTurns:   cfg.HasPriorTurns,
 	}
 	conv, init, live, err := d.connect(ctx, launchCfg, cfg.PrepareEnv)
 	if err != nil {
@@ -420,6 +422,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 			}
 		}
 		conv.liveState = live
+		conv.hasDurableTurns = launchCfg.HasPriorTurns
 		conv.start(
 			cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init),
 			d.cfg.SessionMode, d.cfg.SessionOptions, d.cfg.PermissionPolicy,
@@ -506,6 +509,7 @@ func (d *Driver) resumeSession(
 		configOptions = resp.ConfigOptions
 		modes = resp.Modes
 	}
+	conv.hasDurableTurns = launchCfg.HasPriorTurns
 	conv.start(
 		cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init),
 		d.cfg.SessionMode, d.cfg.SessionOptions, d.cfg.PermissionPolicy,

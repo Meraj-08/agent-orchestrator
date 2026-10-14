@@ -472,3 +472,65 @@ func TestNativeConversationExistsRequiresPersistedSteps(t *testing.T) {
 		t.Fatalf("persisted conversation exists = %v, err = %v; want true, nil", exists, err)
 	}
 }
+
+func TestNativeConversationExistsModeScoped(t *testing.T) {
+	home := t.TempDir()
+	plugin := New()
+	env := map[string]string{"GEMINI_HOME": home}
+
+	// Create a DB only in antigravity-acp.
+	acpPath := filepath.Join(home, "antigravity-acp", "conversations", "conv-1.db")
+	if err := os.MkdirAll(filepath.Dir(acpPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(acpPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("CREATE TABLE steps (id INTEGER PRIMARY KEY); INSERT INTO steps DEFAULT VALUES"); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	// TUI probe must NOT find the ACP-only database.
+	tuiRef := ports.SessionRef{Metadata: map[string]string{ports.MetadataKeySessionMode: "tui"}}
+	exists, err := plugin.NativeConversationExists(context.Background(), tuiRef, "conv-1", env)
+	if err != nil || exists {
+		t.Fatalf("tui probe found ACP database: exists = %v, err = %v; want false, nil", exists, err)
+	}
+
+	// Chat probe MUST find the ACP database.
+	chatRef := ports.SessionRef{Metadata: map[string]string{ports.MetadataKeySessionMode: "chat"}}
+	exists, err = plugin.NativeConversationExists(context.Background(), chatRef, "conv-1", env)
+	if err != nil || !exists {
+		t.Fatalf("chat probe failed to find ACP database: exists = %v, err = %v; want true, nil", exists, err)
+	}
+
+	// Create a DB only in antigravity-cli.
+	cliPath := filepath.Join(home, "antigravity-cli", "conversations", "conv-2.db")
+	if err := os.MkdirAll(filepath.Dir(cliPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	db, err = sql.Open("sqlite", "file:"+filepath.ToSlash(cliPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("CREATE TABLE steps (id INTEGER PRIMARY KEY); INSERT INTO steps DEFAULT VALUES"); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	// Chat probe must NOT find the CLI-only database.
+	exists, err = plugin.NativeConversationExists(context.Background(), chatRef, "conv-2", env)
+	if err != nil || exists {
+		t.Fatalf("chat probe found CLI database: exists = %v, err = %v; want false, nil", exists, err)
+	}
+
+	// TUI probe MUST find the CLI database.
+	exists, err = plugin.NativeConversationExists(context.Background(), tuiRef, "conv-2", env)
+	if err != nil || !exists {
+		t.Fatalf("tui probe failed to find CLI database: exists = %v, err = %v; want true, nil", exists, err)
+	}
+}

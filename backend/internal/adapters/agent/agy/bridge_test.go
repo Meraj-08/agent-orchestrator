@@ -108,3 +108,33 @@ func TestBridgeRejectsPathTraversalAndCopiesSQLiteSidecars(t *testing.T) {
 		}
 	}
 }
+
+func TestBridgeRequiresSourceDatabase(t *testing.T) {
+	home := t.TempDir()
+	const id = "conv-missing-src"
+
+	// If destination DB exists but source DB is missing, bridge must fail.
+	dst := filepath.Join(home, "antigravity-acp", "conversations")
+	if err := os.MkdirAll(dst, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dst, id+".db"), []byte("older-acp-db"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := BridgeConversationToACP(home, id); err == nil {
+		t.Fatal("BridgeConversationToACP succeeded with missing source CLI db; want error")
+	}
+
+	// Reverse direction: missing ACP source db must also fail.
+	cliDst := filepath.Join(home, "antigravity-cli", "conversations")
+	if err := os.MkdirAll(cliDst, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cliDst, "other.db"), []byte("older-cli-db"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := BridgeConversationToCLI(home, "other"); err == nil {
+		t.Fatal("BridgeConversationToCLI succeeded with missing source ACP db; want error")
+	}
+}

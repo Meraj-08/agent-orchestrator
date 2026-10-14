@@ -71,6 +71,25 @@ func TestSetSessionPreambleDoesNotDuplicatePersistedText(t *testing.T) {
 	}
 }
 
+// A live reconnect replays no history, so AO's durable turn record decides
+// whether the standing instructions were already delivered.
+func TestSetSessionPreambleDisarmsForDurableTurns(t *testing.T) {
+	const preamble = "Standing instructions from Agent Orchestrator:\n<ao_standing_instructions>rules</ao_standing_instructions>"
+
+	reconnected := replayConversation()
+	reconnected.hasDurableTurns = true
+	reconnected.setSessionPreamble([]acpsdk.ContentBlock{textBlock(preamble)})
+	if !reconnected.preambleSpent || len(reconnected.preamble) != 0 {
+		t.Fatalf("reconnect with durable turns: preamble = (%v, %d blocks), want disarmed", reconnected.preambleSpent, len(reconnected.preamble))
+	}
+
+	fresh := replayConversation()
+	fresh.setSessionPreamble([]acpsdk.ContentBlock{textBlock(preamble)})
+	if fresh.preambleSpent || len(fresh.preamble) != 1 {
+		t.Fatalf("fresh session: preamble = (%v, %d blocks), want armed", fresh.preambleSpent, len(fresh.preamble))
+	}
+}
+
 func replayUserChunk(sessionID, messageID, text string) acpsdk.SessionNotification {
 	return acpsdk.SessionNotification{
 		SessionId: acpsdk.SessionId(sessionID),

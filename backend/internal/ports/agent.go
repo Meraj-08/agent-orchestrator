@@ -546,6 +546,10 @@ type ActiveTurnSteerer interface {
 // either side hard-coding the other's vocabulary.
 const MetadataKeyAgentSessionID = "agentSessionId"
 
+// MetadataKeySessionMode is the SessionRef.Metadata key that carries the
+// current session mode (e.g. "chat" or "tui").
+const MetadataKeySessionMode = "sessionMode"
+
 // MetadataKeyTitle and MetadataKeySummary are the SessionRef.Metadata keys
 // carrying a session's human title and one-line summary. They are the shared
 // vocabulary every adapter reports under, so the dashboard renders agents

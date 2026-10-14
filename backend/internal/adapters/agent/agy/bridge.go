@@ -59,13 +59,7 @@ func bridgeConversation(srcDir, dstDir, conversationID string) error {
 	// SQLite's database and sidecars together; hardlinks would let later writes
 	// from one interface silently mutate the other interface's database.
 	srcDB := filepath.Join(srcDir, "conversations", conversationID+".db")
-	dstDB := filepath.Join(dstDir, "conversations", conversationID+".db")
 	if _, err := os.Stat(srcDB); err != nil {
-		if os.IsNotExist(err) {
-			if _, dstErr := os.Stat(dstDB); dstErr == nil {
-				return nil
-			}
-		}
 		return fmt.Errorf("find source conversation database %s: %w", conversationID, err)
 	}
 	for _, suffix := range []string{".db", ".db-wal", ".db-shm", ".meta"} {

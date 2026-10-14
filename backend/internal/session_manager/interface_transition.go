@@ -797,6 +797,7 @@ func (m *Manager) persistedNativeConversationID(
 		WorkspacePath: rec.Metadata.WorkspacePath,
 		Metadata: map[string]string{
 			ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID,
+			ports.MetadataKeySessionMode:    string(rec.Mode),
 		},
 	}, id, env)
 	if err != nil {
