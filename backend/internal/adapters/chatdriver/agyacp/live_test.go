@@ -3,6 +3,7 @@ package agyacp
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -136,6 +137,97 @@ func TestLiveAntigravityACPConformance(t *testing.T) {
 			t.Fatalf("resumed answer %q lost the earlier context", turn.answer)
 		}
 	})
+}
+
+// TestLiveAntigravityACPAndCLIShareConversationAcrossCopiedDatabases verifies
+// the provider's shared UUID/schema claim across its separate storage roots.
+// The test copies the closed SQLite file in each direction, then exercises the
+// real `agy --conversation` and ACP `session/load` resume paths. AO's automatic
+// database bridge is a separate implementation step.
+func TestLiveAntigravityACPAndCLIShareConversationAcrossCopiedDatabases(t *testing.T) {
+	if os.Getenv("AO_LIVE_AGY") != "1" {
+		t.Skip("set AO_LIVE_AGY=1 to run against the local Antigravity ACP server, CLI, and Google sign-in")
+	}
+	geminiHome := privateGeminiHome(t)
+	t.Setenv("GEMINI_HOME", geminiHome)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	driver := New(agy.New(), nil)
+	workspace := t.TempDir()
+	conversation, err := driver.Start(ctx, ports.ChatStartConfig{
+		SessionID: "live-agy-cross-interface", DataDir: t.TempDir(), WorkspacePath: workspace,
+		Env: envMap(), Permissions: ports.PermissionModeBypassPermissions,
+	})
+	if err != nil {
+		t.Fatalf("Start ACP conversation: %v", err)
+	}
+	defer func() { _ = conversation.Close() }()
+	providerID := conversation.ProviderConversationID()
+	marker := "AGY_CROSS_INTERFACE_MARKER_" + time.Now().Format("150405.000000")
+	runTurn(ctx, t, conversation, "Remember this exact marker for later: "+marker,
+		ports.ChatTurnSettings{Approval: ports.PermissionModeBypassPermissions}, nil)
+
+	terminator, ok := conversation.(ports.ChatProviderTerminator)
+	if !ok {
+		t.Fatal("conversation cannot terminate its ACP provider")
+	}
+	if err := terminator.Terminate(); err != nil {
+		t.Fatalf("Terminate ACP provider: %v", err)
+	}
+	if err := conversation.Close(); err != nil {
+		t.Fatalf("Close ACP conversation: %v", err)
+	}
+
+	acpDB := filepath.Join(geminiHome, "antigravity-acp", "conversations", providerID+".db")
+	cliDB := filepath.Join(geminiHome, "antigravity-cli", "conversations", providerID+".db")
+	copyConversationDB(t, acpDB, cliDB)
+
+	command, resumable, err := agy.New().GetRestoreCommand(ctx, ports.RestoreConfig{
+		Session: ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: providerID}},
+	})
+	if err != nil || !resumable {
+		t.Fatalf("GetRestoreCommand = (%v, %v), want resumable command", err, resumable)
+	}
+	command = append(command, "--print", "Repeat the exact marker I asked you to remember.")
+	cli := exec.CommandContext(ctx, command[0], command[1:]...)
+	cli.Env = append(os.Environ(), "GEMINI_HOME="+geminiHome)
+	output, err := cli.CombinedOutput()
+	if err != nil {
+		t.Fatalf("agy --conversation failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), marker) {
+		t.Fatalf("agy did not resume ACP history: output %q does not contain marker %q", output, marker)
+	}
+
+	copyConversationDB(t, cliDB, acpDB)
+	resumed, err := driver.Resume(ctx, ports.ChatResumeConfig{
+		SessionID: "live-agy-cross-interface", ProviderConversationID: providerID,
+		WorkspacePath: workspace, Env: envMap(), Permissions: ports.PermissionModeBypassPermissions,
+	})
+	if err != nil {
+		t.Fatalf("ACP session/load after terminal write: %v", err)
+	}
+	defer func() { _ = resumed.Close() }()
+	turn := runTurn(ctx, t, resumed, "Repeat the exact marker I asked you to remember.",
+		ports.ChatTurnSettings{Approval: ports.PermissionModeBypassPermissions}, nil)
+	if !strings.Contains(turn.answer, marker) {
+		t.Fatalf("ACP session/load did not resume the copied terminal database: answer %q lacks marker %q", turn.answer, marker)
+	}
+}
+
+func copyConversationDB(t *testing.T, source, destination string) {
+	t.Helper()
+	data, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatalf("read conversation database %s: %v", source, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
+		t.Fatalf("create conversation directory: %v", err)
+	}
+	if err := os.WriteFile(destination, data, 0o600); err != nil {
+		t.Fatalf("write conversation database %s: %v", destination, err)
+	}
 }
 
 type liveTurn struct {

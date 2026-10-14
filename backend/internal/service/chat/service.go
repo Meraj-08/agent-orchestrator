@@ -382,10 +382,15 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 		if rec.Harness == domain.HarnessClaudeCode && trustedProvenance && nativeEvidence == "" {
 			replayCheckpoint.hardMismatches = append(replayCheckpoint.hardMismatches, ports.ChatHistoryMismatchUnsettledBoundary)
 		}
-		if rec.Metadata.ConversationCheckpointUnsettled ||
+		// Antigravity's TUI hooks do not expose prompt/turn boundaries. Its Stop
+		// signal can therefore leave this marker set even when the shared native
+		// conversation is intact. For Agy, defer that one boundary decision to
+		// required ACP history replay below; the persisted checkpoint text,
+		// provider identity, and AO high-water checks remain enforced.
+		if rec.Harness != domain.HarnessAgy && (rec.Metadata.ConversationCheckpointUnsettled ||
 			(checkpointState == domain.ConversationCheckpointComplete &&
 				strings.TrimSpace(rec.Metadata.LatestUserPrompt) == "" &&
-				strings.TrimSpace(rec.Metadata.LatestAssistantUpdate) != "") {
+				strings.TrimSpace(rec.Metadata.LatestAssistantUpdate) != "")) {
 			// A Stop without its prompt/turn identity cannot be matched safely by
 			// text: two turns may have identical answers. This hard gate is never
 			// waived by provider-history recovery.

@@ -10,6 +10,8 @@ import (
 	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
+
+	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 )
 
 // oauthPersonal is Antigravity's "Log in with Google" ACP auth method.
@@ -29,16 +31,16 @@ const authTimeout = 20 * time.Second
 // that sign-in and persists the choice to its own settings. In every other
 // case AO leaves auth to the user and surfaces the ordinary sign-in error.
 type authBootstrap struct {
-	geminiHome func() (string, error)
+	geminiHome func(map[string]string) (string, error)
 	timeout    time.Duration
 }
 
-func newAuthBootstrap(geminiHome func() (string, error)) authBootstrap {
+func newAuthBootstrap(geminiHome func(map[string]string) (string, error)) authBootstrap {
 	return authBootstrap{geminiHome: geminiHome, timeout: authTimeout}
 }
 
-func (b authBootstrap) run(ctx context.Context, conn *acpsdk.ClientSideConnection, init acpsdk.InitializeResponse) error {
-	return b.bootstrap(ctx, init, func(ctx context.Context, methodID string) error {
+func (b authBootstrap) run(ctx context.Context, conn *acpsdk.ClientSideConnection, init acpsdk.InitializeResponse, cfg acpdriver.LaunchConfig) error {
+	return b.bootstrap(ctx, init, cfg.Env, func(ctx context.Context, methodID string) error {
 		_, err := conn.Authenticate(ctx, acpsdk.AuthenticateRequest{MethodId: methodID})
 		return err
 	})
@@ -49,12 +51,13 @@ func (b authBootstrap) run(ctx context.Context, conn *acpsdk.ClientSideConnectio
 func (b authBootstrap) bootstrap(
 	ctx context.Context,
 	init acpsdk.InitializeResponse,
+	env map[string]string,
 	authenticate func(context.Context, string) error,
 ) error {
 	if !advertises(init, oauthPersonal) {
 		return nil
 	}
-	home, err := b.geminiHome()
+	home, err := b.geminiHome(env)
 	if err != nil {
 		return nil
 	}

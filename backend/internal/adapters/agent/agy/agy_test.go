@@ -2,6 +2,7 @@ package agy
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,7 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	_ "modernc.org/sqlite"
 )
 
 func TestManifest(t *testing.T) {
@@ -121,6 +124,35 @@ func TestGetRestoreCommandNoSessionID(t *testing.T) {
 	}
 	if ok {
 		t.Fatal("expected ok=false when agentSessionId is missing")
+	}
+}
+
+func TestNativeConversationIDUsesTheSharedAntigravityID(t *testing.T) {
+	plugin := New()
+	for _, tc := range []struct {
+		name       string
+		mode       domain.SessionMode
+		providerID string
+		agentID    string
+		want       string
+	}{
+		{name: "ACP to CLI", mode: domain.SessionModeChat, providerID: " shared-id ", agentID: "stale-cli-id", want: "shared-id"},
+		{name: "CLI to ACP", mode: domain.SessionModeTUI, providerID: "stale-acp-id", agentID: " shared-id ", want: "shared-id"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok, err := plugin.NativeConversationID(context.Background(), ports.SessionRef{
+				Metadata: map[string]string{ports.MetadataKeyAgentSessionID: tc.agentID},
+			}, tc.mode, tc.providerID)
+			if err != nil || !ok || got != tc.want {
+				t.Fatalf("NativeConversationID = (%q, %v, %v), want (%q, true, nil)", got, ok, err, tc.want)
+			}
+		})
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := plugin.NativeConversationID(ctx, ports.SessionRef{}, domain.SessionModeChat, "shared-id"); err != context.Canceled {
+		t.Fatalf("cancelled NativeConversationID error = %v, want context.Canceled", err)
 	}
 }
 
@@ -366,5 +398,75 @@ func TestGetConfigSpecReportsModelField(t *testing.T) {
 	}
 	if !reflect.DeepEqual(spec.Fields, want) {
 		t.Fatalf("config fields\nwant: %#v\n got: %#v", want, spec.Fields)
+	}
+}
+
+func TestGetRestoreCommandDoesNotBridgeDuringPreflight(t *testing.T) {
+	geminiHome := t.TempDir()
+	t.Setenv("GEMINI_HOME", geminiHome)
+
+	acpDB := filepath.Join(geminiHome, "antigravity-acp", "conversations", "native-id-456.db")
+	if err := os.MkdirAll(filepath.Dir(acpDB), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(acpDB, []byte("acp-db-payload"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	plugin := &Plugin{resolvedBinary: "agy"}
+	cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		Session: ports.SessionRef{
+			Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "native-id-456"},
+		},
+	})
+	if err != nil || !ok {
+		t.Fatalf("GetRestoreCommand: ok=%v, err=%v", ok, err)
+	}
+	if len(cmd) == 0 || cmd[len(cmd)-1] != "native-id-456" {
+		t.Fatalf("unexpected cmd: %v", cmd)
+	}
+
+	cliDB := filepath.Join(geminiHome, "antigravity-cli", "conversations", "native-id-456.db")
+	if _, err := os.Stat(cliDB); !os.IsNotExist(err) {
+		t.Fatalf("preflight unexpectedly bridged source storage: stat err = %v", err)
+	}
+}
+
+func TestNativeConversationExistsRequiresPersistedSteps(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "antigravity-acp", "conversations", "native-id.db")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("CREATE TABLE steps (id INTEGER PRIMARY KEY)"); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	plugin := New()
+	exists, err := plugin.NativeConversationExists(context.Background(), ports.SessionRef{}, "native-id", map[string]string{"GEMINI_HOME": home})
+	if err != nil || exists {
+		t.Fatalf("empty conversation exists = %v, err = %v; want false, nil", exists, err)
+	}
+	db, err = sql.Open("sqlite", "file:"+filepath.ToSlash(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO steps DEFAULT VALUES"); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	exists, err = plugin.NativeConversationExists(context.Background(), ports.SessionRef{}, "native-id", map[string]string{"GEMINI_HOME": home})
+	if err != nil || !exists {
+		t.Fatalf("persisted conversation exists = %v, err = %v; want true, nil", exists, err)
 	}
 }

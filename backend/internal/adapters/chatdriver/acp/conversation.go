@@ -341,10 +341,58 @@ func (c *conversation) setReportedProviderConversationID(sessionID string) {
 // prompt replaces the original. It is consumed in StartDeferredTurn so a turn
 // that never starts leaves it armed.
 func (c *conversation) setSessionPreamble(blocks []acpsdk.ContentBlock) {
+	// Standing context is only intended to lead the first prompt of a session.
+	// If the conversation already has historical user turns (e.g. from TUI or
+	// prior Chat turns), or if history already contains the preamble text, do
+	// not inject standing instructions into subsequent mid-conversation user prompts.
+	if c.nativeHistoryHasUserTurns() || c.nativeHistoryContainsPreamble(blocks) {
+		blocks = nil
+	}
 	c.mu.Lock()
 	c.preamble = blocks
 	c.preambleSpent = len(blocks) == 0
 	c.mu.Unlock()
+}
+
+func (c *conversation) nativeHistoryHasUserTurns() bool {
+	c.historyMu.Lock()
+	defer c.historyMu.Unlock()
+	for _, event := range c.historyEvents {
+		if event.Kind == ports.ChatEventUserMessageCompleted {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *conversation) nativeHistoryContainsPreamble(blocks []acpsdk.ContentBlock) bool {
+	var expected []string
+	for _, block := range blocks {
+		if block.Text != nil && strings.TrimSpace(block.Text.Text) != "" {
+			expected = append(expected, normalizePreambleText(block.Text.Text))
+		}
+	}
+	if len(expected) == 0 {
+		return false
+	}
+	c.historyMu.Lock()
+	defer c.historyMu.Unlock()
+	for _, event := range c.historyEvents {
+		if event.Kind != ports.ChatEventUserMessageCompleted {
+			continue
+		}
+		text := normalizePreambleText(event.Text)
+		for _, candidate := range expected {
+			if text == candidate || strings.Contains(text, candidate) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func normalizePreambleText(s string) string {
+	return strings.TrimSpace(strings.ReplaceAll(s, "\r\n", "\n"))
 }
 
 func (c *conversation) Capabilities() ports.ChatCapabilities {

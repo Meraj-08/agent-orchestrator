@@ -17,6 +17,7 @@ import (
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agy"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -38,13 +39,47 @@ const (
 	modeYolo     = "yolo"
 )
 
+// Driver wraps acpdriver to provide Antigravity database bridging on resume.
+type Driver struct {
+	ports.ChatDriver
+	resolver resolver
+}
+
+var _ ports.ChatDriver = (*Driver)(nil)
+var _ ports.ChatDriverReconnector = (*Driver)(nil)
+
 // New constructs the Antigravity ACP Chat driver.
 func New(plugin Plugin, log *slog.Logger) ports.ChatDriver {
 	var agyCLI func(context.Context) (string, error)
 	if plugin != nil {
 		agyCLI = plugin.ResolveBinary
 	}
-	return acpdriver.New(buildConfig(plugin, newResolver(agyCLI), log), log)
+	res := newResolver(agyCLI)
+	base := acpdriver.New(buildConfig(plugin, res, log), log)
+	return &Driver{ChatDriver: base, resolver: res}
+}
+
+// Resume bridges any terminal conversation files from antigravity-cli into
+// antigravity-acp before loading the session.
+func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
+	if cfg.ProviderConversationID != "" {
+		geminiHome, err := d.resolver.geminiHomeFor(cfg.Env)
+		if err != nil {
+			return nil, fmt.Errorf("resolve Antigravity storage for resume: %w", err)
+		}
+		if err := agy.BridgeConversationToACP(geminiHome, cfg.ProviderConversationID); err != nil {
+			return nil, fmt.Errorf("prepare Antigravity conversation for ACP resume: %w", err)
+		}
+	}
+	return d.ChatDriver.Resume(ctx, cfg)
+}
+
+// Reconnect delegates to the underlying ACP transport.
+func (d *Driver) Reconnect(ctx context.Context, cfg ports.ChatResumeConfig) (ports.ChatConversation, error) {
+	if reconnector, ok := d.ChatDriver.(ports.ChatDriverReconnector); ok {
+		return reconnector.Reconnect(ctx, cfg)
+	}
+	return nil, ports.ErrChatResumeFailed
 }
 
 func buildConfig(plugin Plugin, resolve resolver, log *slog.Logger) acpdriver.Config {
@@ -91,7 +126,7 @@ func buildConfig(plugin Plugin, resolve resolver, log *slog.Logger) acpdriver.Co
 			return acpdriver.Launch{Command: server, Args: launchArgs(runtime.GOOS), Env: env}, nil
 		},
 		ValidateInitialize: validateInitialize,
-		AfterInitialize:    newAuthBootstrap(resolve.geminiHome).run,
+		AfterInitialize:    newAuthBootstrap(resolve.geminiHomeFor).run,
 		SessionMode:        sessionMode,
 		SessionOptions:     sessionOptions,
 		SessionPreamble:    sessionPreamble,
