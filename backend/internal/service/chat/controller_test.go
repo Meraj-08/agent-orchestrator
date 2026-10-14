@@ -1965,7 +1965,6 @@ func TestInterfaceHandoffCheckpointHistoryPolicy(t *testing.T) {
 func TestInterfaceHandoffTrustedCheckpointMayPrecedeLaterCompletedTurn(t *testing.T) {
 	for _, tt := range []struct {
 		name         string
-		harness      domain.AgentHarness
 		state        domain.ConversationCheckpointState
 		assistant    string
 		turnID       string
@@ -1985,8 +1984,6 @@ func TestInterfaceHandoffTrustedCheckpointMayPrecedeLaterCompletedTurn(t *testin
 		{name: "pair cannot stand in for missing current turn", state: domain.ConversationCheckpointComplete, turnID: "missing-current-turn", assistant: "trusted checkpoint assistant", wantMismatch: true},
 		{name: "pending prompt cannot match older turn", state: domain.ConversationCheckpointPrompt, wantMismatch: true},
 		{name: "unmatched newer stop still blocks", state: domain.ConversationCheckpointComplete, unsettled: true, wantMismatch: true},
-		{name: "Agy native history settles terminal stop boundary", harness: domain.HarnessAgy, state: domain.ConversationCheckpointComplete,
-			assistant: "trusted checkpoint assistant", turnID: "checkpoint-turn", unsettled: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			st := openStore(t)
@@ -2007,9 +2004,6 @@ func TestInterfaceHandoffTrustedCheckpointMayPrecedeLaterCompletedTurn(t *testin
 			rec.Metadata.ConversationCheckpointUnsettled = tt.unsettled
 			rec.Metadata.ConversationCheckpointGeneration = "terminal-generation"
 			rec.Metadata.ConversationCheckpointNativeID = "thread-1"
-			if tt.harness != "" {
-				rec.Harness = tt.harness
-			}
 			if err := st.UpdateSession(context.Background(), rec); err != nil {
 				t.Fatalf("seed trusted checkpoint: %v", err)
 			}
@@ -2035,12 +2029,7 @@ func TestInterfaceHandoffTrustedCheckpointMayPrecedeLaterCompletedTurn(t *testin
 			t.Cleanup(func() { _ = svc.Stop(context.Background(), testSession) })
 
 			ctrl, err := svc.Start(context.Background(), chatsvc.StartConfig{
-				SessionID: testSession, ProjectID: testProject, Harness: func() domain.AgentHarness {
-					if tt.harness != "" {
-						return tt.harness
-					}
-					return domain.HarnessCodex
-				}(),
+				SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessCodex,
 				WorkspacePath: t.TempDir(), ProviderConversationID: "thread-1", HistoryMode: ports.ChatHistoryRequired,
 				HistoryPolicy: domain.SessionInterfaceTransitionHistoryStrict,
 			})

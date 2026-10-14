@@ -13,9 +13,19 @@ the SQLite file under separate directories: the ACP server uses
 `GEMINI_HOME/antigravity-cli/conversations`. After AO stops the source
 controller, it copies the database and SQLite sidecars, metadata, and brain
 files into the target directory. It resolves the per-session `GEMINI_HOME`
-before falling back to the daemon environment or `~/.gemini`; bridge failures
-fail the transition before the target controller starts. Antigravity's
-persisted `steps` table is also checked before AO offers a history handoff.
+before falling back to the daemon environment or `~/.gemini`. The source
+interface's database must exist: AO never falls back to an older copy in the
+target directory, and a bridge failure fails the transition before the target
+controller starts. Before offering a history handoff, AO checks the source
+interface's database for persisted `steps`.
+
+A terminal resumed by a Chat to Terminal switch has no fresh `Stop` hook until
+its next turn, so AO reads the rendered screen to prove it is idle before
+switching back: a `>` composer between two `─` rules with a `? for shortcuts`
+footer. A draft, `esc to cancel` (working), or an approval or trust dialog is
+not idle, and anything unrecognized fails the switch closed. The adapter does
+not implement the raw-output `TerminalActivityDetector`, which would stall
+message delivery to an Agy terminal.
 
 The `agy` CLI has no ACP mode. Its machine interface is headless
 `--output-format stream-json`, which cannot prompt for approvals. Google
@@ -89,7 +99,9 @@ caches that grant, which would make a later switch to a stricter mode ineffectiv
 ## Standing instructions
 
 Antigravity accepts no system-prompt flag. AO sends its standing instructions as
-a text block ahead of the first prompt, and again after `session/load`.
+a text block ahead of the first prompt of a new session. A resumed conversation
+that already has turns, in AO's own history (including a live reconnect) or in
+the `session/load` replay, received them then, so they are not repeated.
 Instructions sent as an embedded resource were treated as something to look up
 rather than as instructions.
 

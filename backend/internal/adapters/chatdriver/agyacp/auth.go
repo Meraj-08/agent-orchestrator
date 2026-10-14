@@ -11,6 +11,7 @@ import (
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agy"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 )
 
@@ -104,7 +105,7 @@ func authConfigured(geminiHome string) bool {
 			Type string `json:"type"`
 		} `json:"auth"`
 	}
-	if !readJSON(filepath.Join(geminiHome, "antigravity-acp", "settings.json"), &settings) {
+	if !readJSON(filepath.Join(geminiHome, agy.ACPStorageDir, "settings.json"), &settings) {
 		return false
 	}
 	return strings.TrimSpace(settings.Auth.Type) != ""

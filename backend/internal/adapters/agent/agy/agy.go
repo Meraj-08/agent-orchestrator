@@ -182,12 +182,12 @@ func (p *Plugin) NativeConversationExists(
 	if err != nil {
 		return false, err
 	}
-	modeDirs := []string{"antigravity-acp", "antigravity-cli"}
+	modeDirs := []string{ACPStorageDir, CLIStorageDir}
 	if rawMode := session.Metadata[ports.MetadataKeySessionMode]; rawMode != "" {
 		if mode := domain.NormalizeSessionMode(domain.SessionMode(rawMode)); mode == domain.SessionModeChat {
-			modeDirs = []string{"antigravity-acp"}
+			modeDirs = []string{ACPStorageDir}
 		} else if mode == domain.SessionModeTUI {
-			modeDirs = []string{"antigravity-cli"}
+			modeDirs = []string{CLIStorageDir}
 		}
 	}
 	for _, modeDir := range modeDirs {

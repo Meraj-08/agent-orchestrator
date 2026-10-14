@@ -17,6 +17,7 @@ import (
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agy"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -91,7 +92,7 @@ func buildConfig(plugin Plugin, resolve resolver, log *slog.Logger) acpdriver.Co
 			return acpdriver.Launch{Command: server, Args: launchArgs(runtime.GOOS), Env: env}, nil
 		},
 		ValidateInitialize: validateInitialize,
-		AfterInitialize:    newAuthBootstrap(resolve.geminiHomeFor).run,
+		AfterInitialize:    newAuthBootstrap(agy.GeminiHome).run,
 		SessionMode:        sessionMode,
 		SessionOptions:     sessionOptions,
 		SessionPreamble:    sessionPreamble,

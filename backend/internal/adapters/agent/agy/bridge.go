@@ -8,6 +8,13 @@ import (
 	"strings"
 )
 
+// The storage roots under GEMINI_HOME where the ACP server and the terminal
+// CLI keep their conversations, settings, and brain files.
+const (
+	ACPStorageDir = "antigravity-acp"
+	CLIStorageDir = "antigravity-cli"
+)
+
 // GeminiHome resolves Antigravity's storage directory (~/.gemini or $GEMINI_HOME).
 func GeminiHome(env map[string]string) (string, error) {
 	if dir := strings.TrimSpace(env["GEMINI_HOME"]); dir != "" {
@@ -30,8 +37,8 @@ func BridgeConversationToCLI(geminiHome, conversationID string) error {
 	if id == "" {
 		return nil
 	}
-	srcDir := filepath.Join(geminiHome, "antigravity-acp")
-	dstDir := filepath.Join(geminiHome, "antigravity-cli")
+	srcDir := filepath.Join(geminiHome, ACPStorageDir)
+	dstDir := filepath.Join(geminiHome, CLIStorageDir)
 	return bridgeConversation(srcDir, dstDir, id)
 }
 
@@ -42,8 +49,8 @@ func BridgeConversationToACP(geminiHome, conversationID string) error {
 	if id == "" {
 		return nil
 	}
-	srcDir := filepath.Join(geminiHome, "antigravity-cli")
-	dstDir := filepath.Join(geminiHome, "antigravity-acp")
+	srcDir := filepath.Join(geminiHome, CLIStorageDir)
+	dstDir := filepath.Join(geminiHome, ACPStorageDir)
 	return bridgeConversation(srcDir, dstDir, id)
 }
 

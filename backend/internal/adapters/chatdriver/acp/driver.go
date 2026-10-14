@@ -45,7 +45,6 @@ type LaunchConfig struct {
 	Model           string
 	Permissions     ports.PermissionMode
 	SystemPrompt    string
-	HasPriorTurns   bool
 	ProviderScopeID string
 }
 
@@ -78,8 +77,9 @@ type Config struct {
 	// SessionPreamble returns standing context to attach to the first prompt of a
 	// session as an embedded ACP resource. It is for agents that accept no
 	// system-prompt launch flag and ignore session/new _meta, but do execute
-	// prompt content blocks. Delivered on session/new and again on session/load,
-	// because standing context is process input rather than transcript history.
+	// prompt content blocks. It leads the first prompt of a new session. A
+	// resumed conversation that already has turns received it then, so it is not
+	// repeated (see conversation.setSessionPreamble).
 	SessionPreamble func(LaunchConfig) []acpsdk.ContentBlock
 	// SessionMode maps AO's approval vocabulary onto this ACP agent's mode ids.
 	// Empty means "leave the provider/user default unchanged".
@@ -388,7 +388,6 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		Model: cfg.Model, Permissions: cfg.Permissions, SystemPrompt: cfg.SystemPrompt,
 		ProviderScopeID: cfg.ProviderScopeID,
 		ReconnectOnly:   cfg.ReconnectOnly,
-		HasPriorTurns:   cfg.HasPriorTurns,
 	}
 	conv, init, live, err := d.connect(ctx, launchCfg, cfg.PrepareEnv)
 	if err != nil {
@@ -422,7 +421,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 			}
 		}
 		conv.liveState = live
-		conv.hasDurableTurns = launchCfg.HasPriorTurns
+		conv.hasDurableTurns = cfg.HasPriorTurns
 		conv.start(
 			cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init),
 			d.cfg.SessionMode, d.cfg.SessionOptions, d.cfg.PermissionPolicy,
@@ -509,7 +508,7 @@ func (d *Driver) resumeSession(
 		configOptions = resp.ConfigOptions
 		modes = resp.Modes
 	}
-	conv.hasDurableTurns = launchCfg.HasPriorTurns
+	conv.hasDurableTurns = cfg.HasPriorTurns
 	conv.start(
 		cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init),
 		d.cfg.SessionMode, d.cfg.SessionOptions, d.cfg.PermissionPolicy,

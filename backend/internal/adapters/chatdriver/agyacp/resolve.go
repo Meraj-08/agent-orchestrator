@@ -42,7 +42,6 @@ var serverSpec = binaryutil.BinarySpec{
 // are injectable so tests never touch the real home directory or PATH.
 type resolver struct {
 	getenv      func(string) string
-	homeDir     func() (string, error)
 	isFile      func(string) bool
 	agyCLI      func(context.Context) (string, error)
 	resolveSpec func(context.Context, binaryutil.BinarySpec) (string, error)
@@ -50,7 +49,7 @@ type resolver struct {
 
 func newResolver(agyCLI func(context.Context) (string, error)) resolver {
 	return resolver{
-		getenv: os.Getenv, homeDir: os.UserHomeDir, isFile: isExecutableFile,
+		getenv: os.Getenv, isFile: isExecutableFile,
 		agyCLI: agyCLI, resolveSpec: binaryutil.ResolveBinary,
 	}
 }
@@ -114,28 +113,6 @@ func (r resolver) harnessPath(server string) string {
 		return path
 	}
 	return ""
-}
-
-// geminiHome is where Antigravity keeps its settings and login state.
-func (r resolver) geminiHome() (string, error) {
-	return r.geminiHomeFor(nil)
-}
-
-// geminiHomeFor resolves the same home directory passed to the provider. A
-// session can override GEMINI_HOME independently of the daemon environment.
-func (r resolver) geminiHomeFor(env map[string]string) (string, error) {
-	dir := strings.TrimSpace(env["GEMINI_HOME"])
-	if dir == "" {
-		dir = strings.TrimSpace(r.getenv("GEMINI_HOME"))
-	}
-	if dir != "" {
-		return dir, nil
-	}
-	home, err := r.homeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve home directory: %w", err)
-	}
-	return filepath.Join(home, ".gemini"), nil
 }
 
 func isExecutableFile(path string) bool {

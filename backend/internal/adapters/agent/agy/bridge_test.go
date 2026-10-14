@@ -138,3 +138,19 @@ func TestBridgeRequiresSourceDatabase(t *testing.T) {
 		t.Fatal("BridgeConversationToCLI succeeded with missing source ACP db; want error")
 	}
 }
+
+func TestGeminiHomePrefersSessionThenDaemonThenDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GEMINI_HOME", "")
+	if got, _ := GeminiHome(nil); got != filepath.Join(home, ".gemini") {
+		t.Errorf("default GeminiHome = %q", got)
+	}
+	t.Setenv("GEMINI_HOME", "/daemon/home")
+	if got, _ := GeminiHome(nil); got != "/daemon/home" {
+		t.Errorf("daemon GeminiHome = %q", got)
+	}
+	if got, _ := GeminiHome(map[string]string{"GEMINI_HOME": "/session/home"}); got != "/session/home" {
+		t.Errorf("session GeminiHome = %q", got)
+	}
+}

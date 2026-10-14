@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agy"
+
 	acpsdk "github.com/coder/acp-go-sdk"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
@@ -187,22 +189,6 @@ func TestLaunchPointsTheServerAtItsHarness(t *testing.T) {
 	}
 }
 
-func TestResolverDefaultsToTheUsersGeminiHome(t *testing.T) {
-	home := t.TempDir()
-	r := testResolver(t, nil)
-	r.homeDir = func() (string, error) { return home, nil }
-	if got, _ := r.geminiHome(); got != filepath.Join(home, ".gemini") {
-		t.Errorf("geminiHome = %q", got)
-	}
-	r.getenv = func(key string) string { return map[string]string{"GEMINI_HOME": "/elsewhere"}[key] }
-	if got, _ := r.geminiHome(); got != "/elsewhere" {
-		t.Errorf("geminiHome with GEMINI_HOME = %q", got)
-	}
-	if got, _ := r.geminiHomeFor(map[string]string{"GEMINI_HOME": "/session/home"}); got != "/session/home" {
-		t.Errorf("geminiHomeFor(session env) = %q", got)
-	}
-}
-
 func TestProbeReportsAMissingServerAsUnavailable(t *testing.T) {
 	r := testResolver(t, nil)
 	r.resolveSpec = func(context.Context, binaryutil.BinarySpec) (string, error) { return "", ports.ErrAgentBinaryNotFound }
@@ -271,13 +257,12 @@ func TestAuthBootstrapChecksTheSessionGeminiHome(t *testing.T) {
 	daemonHome := t.TempDir()
 	sessionHome := t.TempDir()
 	writeFile(t, filepath.Join(sessionHome, "google_accounts.json"), `{"active":"session@example.com"}`)
-	r := testResolver(t, map[string]string{"GEMINI_HOME": daemonHome})
-	r.homeDir = func() (string, error) { return daemonHome, nil }
+	t.Setenv("GEMINI_HOME", daemonHome)
 	init := acpsdk.InitializeResponse{AuthMethods: []acpsdk.AuthMethod{
 		{Agent: &acpsdk.AuthMethodAgent{Id: "oauth-personal", Name: "Log in with Google"}},
 	}}
 	calls := 0
-	b := newAuthBootstrap(r.geminiHomeFor)
+	b := newAuthBootstrap(agy.GeminiHome)
 	if err := b.bootstrap(context.Background(), init, map[string]string{"GEMINI_HOME": sessionHome}, func(_ context.Context, _ string) error {
 		calls++
 		return nil
@@ -325,11 +310,9 @@ func (f fakePlugin) AuthStatus(context.Context) (ports.AgentAuthStatus, error) {
 
 func testResolver(t *testing.T, env map[string]string) resolver {
 	t.Helper()
-	home := t.TempDir()
 	return resolver{
-		getenv:  func(key string) string { return env[key] },
-		homeDir: func() (string, error) { return home, nil },
-		isFile:  isExecutableFile,
+		getenv: func(key string) string { return env[key] },
+		isFile: isExecutableFile,
 		resolveSpec: func(context.Context, binaryutil.BinarySpec) (string, error) {
 			return "", ports.ErrAgentBinaryNotFound
 		},
