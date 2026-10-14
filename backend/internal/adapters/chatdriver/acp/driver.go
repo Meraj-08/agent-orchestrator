@@ -451,6 +451,17 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		conv.setSessionPreamble(d.sessionPreamble(launchCfg))
 		return conv, nil
 	}
+	return d.resumeSession(ctx, conv, init, launchCfg, cfg, reportedProviderConversationID)
+}
+
+func (d *Driver) resumeSession(
+	ctx context.Context,
+	conv *conversation,
+	init acpsdk.InitializeResponse,
+	launchCfg LaunchConfig,
+	cfg ports.ChatResumeConfig,
+	reportedProviderConversationID string,
+) (ports.ChatConversation, error) {
 	if !supportsSessionRestore(init) {
 		conv.discard()
 		return nil, fmt.Errorf("%w: ACP agent supports neither session/load nor session/resume", ports.ErrChatResumeFailed)
@@ -599,6 +610,7 @@ func (d *Driver) initialize(
 	conv.onAuthRejected = d.cfg.OnAuthRejected
 	conv.promptResponseFailure = d.cfg.PromptResponseFailure
 	conv.hibernationCheck = d.cfg.CanHibernate
+	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
 	conv.historyNotice = d.cfg.HistoryNotice
 	conv.requireAdvertised = d.cfg.RequireAdvertisedOptions
 	if proc.reconnected {
@@ -620,6 +632,7 @@ func (d *Driver) initialize(
 				return nil, acpsdk.InitializeResponse{}, nil, fmt.Errorf("%w: %w", ports.ErrChatDriverIncompatible, err)
 			}
 		}
+		conv.canDeleteFork = init.AgentCapabilities.SessionCapabilities.Delete != nil
 		return conv, init, state, nil
 	}
 
@@ -671,6 +684,7 @@ func (d *Driver) initialize(
 			return nil, acpsdk.InitializeResponse{}, nil, fmt.Errorf("%w: %w", ports.ErrChatDriverIncompatible, err)
 		}
 	}
+	conv.canDeleteFork = init.AgentCapabilities.SessionCapabilities.Delete != nil
 	return conv, init, nil, nil
 }
 
@@ -753,6 +767,9 @@ func conversationCapabilities(
 		caps[ports.ChatCapabilityResume] = false
 	}
 	caps[ports.ChatCapabilityHistory] = init.AgentCapabilities.LoadSession
+	caps[ports.ChatCapabilityFork] = false // ACP has no turn-anchored fork in the pinned SDK.
+	caps[ports.ChatCapabilityForkCurrent] = init.AgentCapabilities.SessionCapabilities.Fork != nil &&
+		supportsSessionRestore(init)
 	if extensionSupported(init.Meta, "steering") {
 		caps[ports.ChatCapabilitySteer] = true
 	}
