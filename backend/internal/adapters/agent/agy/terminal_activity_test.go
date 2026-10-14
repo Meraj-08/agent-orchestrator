@@ -1,154 +1,51 @@
 package agy
 
 import (
-	"os"
+	"strings"
 	"testing"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+)
+
+// Frames captured from Antigravity CLI 1.3.4 (rule width shortened).
+var (
+	agyTestRule   = strings.Repeat("─", 60)
+	agyIdleFrame  = strings.Join([]string{" ┃ Verbosity now defaults to medium", " ┃ esc to dismiss", agyTestRule, ">", agyTestRule, "? for shortcuts                       Gemini 3.8 Flash · medium"}, "\n")
+	agyDraftFrame = strings.Join([]string{agyTestRule, "> Use your shell tool to run exactly: rm victim.txt", agyTestRule, "                                      Gemini 3.8 Flash · medium"}, "\n")
+	agyWorking    = strings.Join([]string{"⡿  Generating...", agyTestRule, ">", agyTestRule, "esc to cancel                         Gemini 3.8 Flash · medium"}, "\n")
+	agyApproval   = strings.Join([]string{agyTestRule, "Requesting permission for:", "   rm victim.txt", "Run this command?", "> 1. Yes, run command", "  4. No, cancel",
+		"  ↑/↓ Navigate · tab Amend · ctrl+g edit/expand command", "esc to cancel                         Gemini 3.8 Flash · medium"}, "\n")
+	agyTrust = strings.Join([]string{"Do you trust the contents of this project?", "> Yes, I trust this folder", "  No, exit", "  ↑/↓ Navigate · enter Confirm"}, "\n")
 )
 
 func TestInspectTerminalSurface(t *testing.T) {
 	p := New()
-
-	tests := []struct {
-		name           string
-		output         string
-		wantWork       ports.TerminalSurfaceWorkState
-		wantComposer   ports.TerminalComposerState
-		wantNotStarted bool
-		wantDetectIdle bool
+	styledIdle := "\x1b[90m" + agyTestRule + "\n\x1b[94m>\x1b[39m\n\x1b[90m" + agyTestRule + "\n? for shortcuts\x1b[39m      \x1b[2mGemini 3.8 Flash · medium"
+	for name, tc := range map[string]struct {
+		frame    string
+		work     ports.TerminalSurfaceWorkState
+		composer ports.TerminalComposerState
 	}{
-		{
-			name: "initial idle screen with banner",
-			output: `      ▄▀▀▄        Antigravity CLI 1.3.4
-     ▀▀▀▀▀▀       test@example.com (Google AI Pro)
-    ▀▀▀▀▀▀▀▀      Gemini 3.8 Flash (Medium)
-   ▄▀▀    ▀▀▄     /workspace
-  ▄▀▀      ▀▀▄
-
- ┃ Verbosity now defaults to medium
- ┃ esc to dismiss
-──────────────────────────────────────────────────────────
->
-──────────────────────────────────────────────────────────
-? for shortcuts                                  Gemini 3.8`,
-			wantWork:       ports.TerminalSurfaceWorkIdle,
-			wantComposer:   ports.TerminalComposerEmpty,
-			wantNotStarted: true,
-			wantDetectIdle: true,
-		},
-		{
-			name: "idle screen with user typed draft without prompt prefix",
-			output: `──────────────────────────────────────────────────────────
-How do I refactor this service?
-──────────────────────────────────────────────────────────
-? for shortcuts                                  Gemini 3.8`,
-			wantWork:       ports.TerminalSurfaceWorkIdle,
-			wantComposer:   ports.TerminalComposerDraft,
-			wantNotStarted: false,
-			wantDetectIdle: false,
-		},
-		{
-			name: "idle screen with user typed draft with prompt prefix",
-			output: `──────────────────────────────────────────────────────────
-> How do I refactor this service?
-──────────────────────────────────────────────────────────
-? for shortcuts                                  Gemini 3.8`,
-			wantWork:       ports.TerminalSurfaceWorkIdle,
-			wantComposer:   ports.TerminalComposerDraft,
-			wantNotStarted: false,
-			wantDetectIdle: false,
-		},
-		{
-			name: "idle screen after turn with assistant question in transcript",
-			output: `> hi
-
-  Hello! How can I help you today with your project?
-
-──────────────────────────────────────────────────────────
->
-──────────────────────────────────────────────────────────
-? for shortcuts                                  Gemini 3.8`,
-			wantWork:       ports.TerminalSurfaceWorkIdle,
-			wantComposer:   ports.TerminalComposerEmpty,
-			wantNotStarted: false,
-			wantDetectIdle: true,
-		},
-		{
-			name: "waiting input permission prompt",
-			output: `Tool requested to execute shell command: rm -rf ./tmp
-Allow / Deny:
-? for shortcuts                                  Gemini 3.8`,
-			wantWork:       ports.TerminalSurfaceWorkWaitingInput,
-			wantComposer:   ports.TerminalComposerUnknown,
-			wantNotStarted: false,
-			wantDetectIdle: false,
-		},
-		{
-			name: "active work with spinner",
-			output: `⠋ Thinking about your request...
-──────────────────────────────────────────────────────────
-? for shortcuts                                  Gemini 3.8`,
-			wantWork:       ports.TerminalSurfaceWorkActive,
-			wantComposer:   ports.TerminalComposerUnknown,
-			wantNotStarted: false,
-			wantDetectIdle: false,
-		},
-		{
-			name: "active work with status text",
-			output: `Working...
-──────────────────────────────────────────────────────────
-? for shortcuts                                  Gemini 3.8`,
-			wantWork:       ports.TerminalSurfaceWorkActive,
-			wantComposer:   ports.TerminalComposerUnknown,
-			wantNotStarted: false,
-			wantDetectIdle: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := p.InspectTerminalSurface(tt.output)
-			if got.Work != tt.wantWork {
-				t.Errorf("InspectTerminalSurface Work = %v, want %v", got.Work, tt.wantWork)
-			}
-			if got.Composer != tt.wantComposer {
-				t.Errorf("InspectTerminalSurface Composer = %v, want %v", got.Composer, tt.wantComposer)
-			}
-			if got.NativeConversationNotStarted != tt.wantNotStarted {
-				t.Errorf("InspectTerminalSurface NativeConversationNotStarted = %v, want %v", got.NativeConversationNotStarted, tt.wantNotStarted)
-			}
-
-			state, auth := p.DetectTerminalActivity(tt.output)
-			if tt.wantDetectIdle {
-				if !auth || state != domain.ActivityIdle {
-					t.Errorf("DetectTerminalActivity = (%v, %v), want (idle, true)", state, auth)
-				}
-			} else {
-				if auth && state == domain.ActivityIdle {
-					t.Errorf("DetectTerminalActivity unexpectedly reported idle")
-				}
-			}
-		})
+		"idle":     {agyIdleFrame, ports.TerminalSurfaceWorkIdle, ports.TerminalComposerEmpty},
+		"styled":   {styledIdle, ports.TerminalSurfaceWorkIdle, ports.TerminalComposerEmpty},
+		"draft":    {agyDraftFrame, ports.TerminalSurfaceWorkUnknown, ports.TerminalComposerDraft},
+		"working":  {agyWorking, ports.TerminalSurfaceWorkActive, ports.TerminalComposerEmpty},
+		"approval": {agyApproval, ports.TerminalSurfaceWorkWaitingInput, ports.TerminalComposerUnknown},
+		"trust":    {agyTrust, ports.TerminalSurfaceWorkWaitingInput, ports.TerminalComposerUnknown},
+		"raw":      {"\n\n\n\n", ports.TerminalSurfaceWorkUnknown, ports.TerminalComposerUnknown},
+	} {
+		got := p.InspectTerminalSurface(tc.frame)
+		if got.Work != tc.work || got.Composer != tc.composer {
+			t.Errorf("%s: work=%v composer=%v, want work=%v composer=%v", name, got.Work, got.Composer, tc.work, tc.composer)
+		}
 	}
 }
 
-func TestLiveCapturedOutput(t *testing.T) {
-	data, err := os.ReadFile("/tmp/live_output.txt")
-	if err != nil {
-		t.Skip("no live output")
-	}
-	p := New()
-	obs := p.InspectTerminalSurface(string(data))
-	t.Logf("obs: Work=%v, Composer=%v, NotStarted=%v", obs.Work, obs.Composer, obs.NativeConversationNotStarted)
-	if obs.Work != ports.TerminalSurfaceWorkIdle {
-		t.Errorf("expected TerminalSurfaceWorkIdle, got %v", obs.Work)
-	}
-	if obs.Composer != ports.TerminalComposerEmpty {
-		t.Errorf("expected TerminalComposerEmpty, got %v", obs.Composer)
-	}
-	if obs.NativeConversationNotStarted {
-		t.Errorf("expected NativeConversationNotStarted=false for ongoing conversation")
+// Message delivery feeds TerminalActivityDetector the raw output stream, which
+// never shows Antigravity's composer. Declaring it would stall delivery.
+func TestPluginDoesNotDeclareTheRawOutputDetector(t *testing.T) {
+	var plugin any = New()
+	if _, ok := plugin.(ports.TerminalActivityDetector); ok {
+		t.Error("Antigravity must not implement TerminalActivityDetector")
 	}
 }

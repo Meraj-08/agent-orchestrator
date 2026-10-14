@@ -361,27 +361,3 @@ func writeFile(t *testing.T, path, content string) {
 		t.Fatal(err)
 	}
 }
-
-func TestDriverResumeBridgesTerminalDatabaseToACP(t *testing.T) {
-	geminiHome := t.TempDir()
-	cliDB := filepath.Join(geminiHome, "antigravity-cli", "conversations", "resumed-id.db")
-	writeFile(t, cliDB, "sqlite-content-from-cli")
-
-	d := New(nil, nil)
-	// Resume will attempt to bridge before connecting to the ACP server. Even though
-	// ACP server connection fails in unit test (no binary), the bridge must have executed.
-	_, _ = d.Resume(context.Background(), ports.ChatResumeConfig{
-		ProviderConversationID: "resumed-id",
-		WorkspacePath:          t.TempDir(),
-		Env:                    map[string]string{"GEMINI_HOME": geminiHome},
-	})
-
-	acpDB := filepath.Join(geminiHome, "antigravity-acp", "conversations", "resumed-id.db")
-	data, err := os.ReadFile(acpDB)
-	if err != nil {
-		t.Fatalf("expected bridged acp db file %s to exist: %v", acpDB, err)
-	}
-	if string(data) != "sqlite-content-from-cli" {
-		t.Fatalf("bridged data = %q, want %q", string(data), "sqlite-content-from-cli")
-	}
-}

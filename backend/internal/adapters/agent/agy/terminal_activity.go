@@ -4,241 +4,83 @@ import (
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/terminalui"
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-var agySpinners = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+// Antigravity deliberately implements only TerminalSurfaceInspector, which AO
+// feeds the rendered screen. TerminalActivityDetector receives the raw output
+// stream, where Antigravity's cursor-positioned redraws never form a composer,
+// so declaring it would stall message delivery to an Antigravity terminal.
+var _ ports.TerminalSurfaceInspector = (*Plugin)(nil)
 
-// DetectTerminalActivity reports idle only when Antigravity's composer and footer are visible.
-func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
-	observation := p.InspectTerminalSurface(output)
-	if observation.Work == ports.TerminalSurfaceWorkIdle && observation.Composer != ports.TerminalComposerDraft {
-		return domain.ActivityIdle, true
-	}
-	return "", false
-}
+// agyBottomScan bounds how far up from the bottom dialogs are looked for.
+const agyBottomScan = 14
 
-// InspectTerminalSurface reports Antigravity work and composer facts separately.
+// InspectTerminalSurface reads Antigravity's rendered screen. A terminal
+// resumed by a Chat to Terminal switch has no fresh Stop hook until its next
+// turn, so an interface switch proves idle from the screen. Every frame that is
+// not positively recognized is unknown.
+//
+// Antigravity CLI 1.3.4, in tmux and in AO's own terminal, draws a ">" composer
+// between two "─" rules, then a footer:
+//
+//	idle      "? for shortcuts"
+//	working   "esc to cancel", with a spinner and "Generating..." above
+//	draft     "> <text>" with a footer holding only the model
+//	dialogs   approvals and folder trust list choices above "↑/↓ Navigate"
 func (p *Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObservation {
-	lines := terminalui.PlainTerminalLines(output)
-	if len(lines) < 2 {
+	lines := terminalui.PlainTerminalLines(strings.ReplaceAll(output, "\r\n", "\n"))
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	var observation ports.TerminalSurfaceObservation
+	start := max(0, len(lines)-agyBottomScan)
+	for _, line := range lines[start:] {
+		if strings.Contains(line, "↑/↓ Navigate") {
+			observation.Work = ports.TerminalSurfaceWorkWaitingInput
+			return observation
+		}
+	}
+	if len(lines) < 4 {
+		return observation
+	}
+	n := len(lines)
+	observation.Composer = agyComposer(lines[n-4], lines[n-3], lines[n-2])
+	if observation.Composer == ports.TerminalComposerUnknown {
 		return ports.TerminalSurfaceObservation{}
 	}
-
-	observation := ports.TerminalSurfaceObservation{}
-
-	// 1. Permission / input prompts fail closed as waiting input.
-	if agyWaitingInput(lines) {
-		observation.Work = ports.TerminalSurfaceWorkWaitingInput
-		return observation
-	}
-
-	// 2. Active work (spinner or progress state).
-	if agyActiveWork(lines) {
+	footer := lines[n-1]
+	switch {
+	case strings.Contains(footer, "esc to cancel"):
 		observation.Work = ports.TerminalSurfaceWorkActive
-		return observation
-	}
-
-	// 3. Settled idle prompt with "? for shortcuts".
-	footerIdx := agyFindFooter(lines)
-	if footerIdx >= 0 {
+	case strings.Contains(footer, "? for shortcuts") && observation.Composer == ports.TerminalComposerEmpty:
 		observation.Work = ports.TerminalSurfaceWorkIdle
-		observation.Composer = agyComposerState(output, lines, footerIdx)
-		if agyInitialBanner(lines) && observation.Composer == ports.TerminalComposerEmpty {
-			observation.NativeConversationNotStarted = true
-		}
-		return observation
 	}
-
 	return observation
 }
 
-func agyWaitingInput(lines []string) bool {
-	start := len(lines) - 8
-	if start < 0 {
-		start = 0
+// agyComposer reads the three composer rows: a rule, "> [draft]", a rule.
+func agyComposer(top, middle, bottom string) ports.TerminalComposerState {
+	if !agyRule(top) || !agyRule(bottom) {
+		return ports.TerminalComposerUnknown
 	}
-	// If a bordered composer exists below, older text is transcript, not a pending decision.
-	hasBorderedComposer := false
-	for i := len(lines) - 1; i >= start; i-- {
-		if isDivider(strings.TrimSpace(lines[i])) {
-			for j := i - 1; j >= 0; j-- {
-				if isDivider(strings.TrimSpace(lines[j])) {
-					hasBorderedComposer = true
-					break
-				}
-			}
-			break
-		}
+	rest, ok := strings.CutPrefix(strings.TrimSpace(middle), ">")
+	if !ok {
+		return ports.TerminalComposerUnknown
 	}
-	if hasBorderedComposer {
+	if strings.TrimSpace(rest) == "" {
+		return ports.TerminalComposerEmpty
+	}
+	return ports.TerminalComposerDraft
+}
+
+func agyRule(line string) bool {
+	line = strings.TrimSpace(line)
+	if len([]rune(line)) < 8 {
 		return false
 	}
-
-	for i := start; i < len(lines); i++ {
-		lower := strings.ToLower(lines[i])
-		if strings.Contains(lower, "allow / deny") ||
-			strings.Contains(lower, "[y/n]") ||
-			strings.Contains(lower, "(y/n)") ||
-			strings.Contains(lower, "approve?") ||
-			strings.Contains(lower, "confirm?") ||
-			strings.Contains(lower, "do you want to proceed") {
-			return true
-		}
-	}
-	return false
-}
-
-func agyActiveWork(lines []string) bool {
-	start := len(lines) - 8
-	if start < 0 {
-		start = 0
-	}
-	for i := start; i < len(lines); i++ {
-		line := lines[i]
-		for _, s := range agySpinners {
-			if strings.Contains(line, s) {
-				return true
-			}
-		}
-		lower := strings.ToLower(line)
-		if strings.Contains(lower, "thinking...") ||
-			strings.Contains(lower, "working...") ||
-			strings.Contains(lower, "generating...") {
-			return true
-		}
-	}
-	return false
-}
-
-func agyFindFooter(lines []string) int {
-	start := len(lines) - 10
-	if start < 0 {
-		start = 0
-	}
-	for i := len(lines) - 1; i >= start; i-- {
-		line := strings.ToLower(lines[i])
-		if strings.Contains(line, "? for shortcuts") || strings.Contains(line, "for shortcuts") {
-			return i
-		}
-	}
-	return -1
-}
-
-func agyComposerState(output string, lines []string, footerIdx int) ports.TerminalComposerState {
-	for _, marker := range []string{">", "›", "❯"} {
-		state := terminalui.LastBorderedPromptComposerState(output, marker)
-		switch state {
-		case terminalui.ComposerEmpty:
-			return ports.TerminalComposerEmpty
-		case terminalui.ComposerDraft:
-			return ports.TerminalComposerDraft
-		}
-	}
-
-	// Fallback: parse lines bounded between composer dividers above the footer.
-	lowerDivider := -1
-	for i := footerIdx - 1; i >= 0; i-- {
-		if isDivider(strings.TrimSpace(lines[i])) {
-			lowerDivider = i
-			break
-		}
-	}
-
-	upperDivider := -1
-	if lowerDivider >= 0 {
-		for i := lowerDivider - 1; i >= 0; i-- {
-			if isDivider(strings.TrimSpace(lines[i])) {
-				upperDivider = i
-				break
-			}
-		}
-	}
-
-	start := 0
-	end := footerIdx
-	if upperDivider >= 0 && lowerDivider > upperDivider {
-		start = upperDivider + 1
-		end = lowerDivider
-	} else if lowerDivider >= 0 {
-		start = lowerDivider - 5
-		if start < 0 {
-			start = 0
-		}
-		end = lowerDivider
-	} else {
-		start = footerIdx - 5
-		if start < 0 {
-			start = 0
-		}
-		end = footerIdx
-	}
-
-	for i := start; i < end; i++ {
-		trimmed := strings.TrimSpace(lines[i])
-		if trimmed == "" || isDivider(trimmed) || isAgyBannerChrome(trimmed) {
-			continue
-		}
-		content := trimmed
-		for _, marker := range []string{">", "›", "❯"} {
-			if strings.HasPrefix(content, marker) {
-				content = strings.TrimSpace(strings.TrimPrefix(content, marker))
-				break
-			}
-		}
-		if content != "" {
-			return ports.TerminalComposerDraft
-		}
-	}
-	return ports.TerminalComposerEmpty
-}
-
-func isDivider(s string) bool {
-	if len(s) < 16 {
-		return false
-	}
-	for _, r := range s {
-		if r != '─' && r != '-' && r != '━' && r != '=' {
-			return false
-		}
-	}
-	return true
-}
-
-func isAgyBannerChrome(s string) bool {
-	lower := strings.ToLower(s)
-	return strings.Contains(lower, "esc to dismiss") ||
-		strings.Contains(lower, "verbosity now defaults") ||
-		strings.Contains(lower, "verbosity is now") ||
-		strings.Contains(lower, "antigravity cli") ||
-		strings.Contains(lower, "gemini")
-}
-
-func agyInitialBanner(lines []string) bool {
-	hasBanner := false
-	for _, line := range lines {
-		if strings.Contains(line, "Antigravity CLI") {
-			hasBanner = true
-			break
-		}
-	}
-	if !hasBanner {
-		return false
-	}
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		for _, m := range []string{">", "❯", "›"} {
-			if strings.HasPrefix(trimmed, m) {
-				rest := strings.TrimSpace(strings.TrimPrefix(trimmed, m))
-				if rest != "" {
-					return false
-				}
-			}
-		}
-		if strings.HasPrefix(trimmed, "└ Tip:") ||
-			strings.Contains(trimmed, "Generating...") ||
-			strings.Contains(trimmed, "Thinking...") {
+	for _, r := range line {
+		if r != '─' {
 			return false
 		}
 	}

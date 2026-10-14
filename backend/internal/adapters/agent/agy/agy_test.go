@@ -4,15 +4,17 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	_ "modernc.org/sqlite"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	_ "modernc.org/sqlite"
 )
 
 func TestManifest(t *testing.T) {
@@ -151,7 +153,7 @@ func TestNativeConversationIDUsesTheSharedAntigravityID(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, _, err := plugin.NativeConversationID(ctx, ports.SessionRef{}, domain.SessionModeChat, "shared-id"); err != context.Canceled {
+	if _, _, err := plugin.NativeConversationID(ctx, ports.SessionRef{}, domain.SessionModeChat, "shared-id"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled NativeConversationID error = %v, want context.Canceled", err)
 	}
 }

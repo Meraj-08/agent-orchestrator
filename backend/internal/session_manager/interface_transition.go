@@ -1017,11 +1017,11 @@ func (m *Manager) prepareSourceHandoff(
 				observation := surfaceInspector.InspectTerminalSurface(output)
 				switch {
 				case observation.Work == ports.TerminalSurfaceWorkWaitingInput,
-					observation.Work == ports.TerminalSurfaceWorkBlocked,
-					observation.Composer == ports.TerminalComposerDraft:
-					// Provider-owned requests and unsent composer drafts must stay
-					// with the source interface. The terminal input gate is closed
-					// while draining, so abort and return control to the source.
+					observation.Work == ports.TerminalSurfaceWorkBlocked:
+					// Provider-owned approval and input requests are not composer
+					// drafts. The terminal input gate is closed while draining, so
+					// waiting here would also make the request impossible to answer.
+					// Abort the drain and return control to the source interface.
 					if cancelProbe != nil {
 						cancelProbe()
 					}

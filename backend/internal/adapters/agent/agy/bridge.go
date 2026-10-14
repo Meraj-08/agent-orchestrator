@@ -108,22 +108,22 @@ func copyIfPresent(src, dst string) error {
 }
 
 func copyFile(src, dst string) error {
-	if err := os.MkdirAll(filepath.Dir(dst), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return err
 	}
-	in, err := os.Open(src)
+	in, err := os.Open(src) //nolint:gosec // path built from a validated conversation id
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 
 	tmp := fmt.Sprintf("%s.tmp.%d", dst, os.Getpid())
-	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
 	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
+		_ = out.Close()
 		_ = os.Remove(tmp)
 		return err
 	}
@@ -142,7 +142,7 @@ func syncBrainDir(src, dst string) error {
 	} else if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return err
 	}
 	return copyDir(src, dst)
@@ -159,7 +159,7 @@ func copyDir(src, dst string) error {
 		}
 		target := filepath.Join(dst, rel)
 		if info.IsDir() {
-			return os.MkdirAll(target, 0700)
+			return os.MkdirAll(target, 0o700)
 		}
 		if !info.Mode().IsRegular() {
 			return nil

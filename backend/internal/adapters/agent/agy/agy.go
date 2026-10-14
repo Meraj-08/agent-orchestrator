@@ -19,6 +19,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/binaryutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+
+	// Registers the "sqlite" driver used to read Antigravity conversation databases.
 	_ "modernc.org/sqlite"
 )
 
@@ -56,7 +58,6 @@ var _ ports.Agent = (*Plugin)(nil)
 var _ ports.AgentInterfaceHandoff = (*Plugin)(nil)
 var _ ports.AgentInterfaceHandoffHistoryProbe = (*Plugin)(nil)
 var _ ports.AgentInterfaceHandoffStorageBridge = (*Plugin)(nil)
-var _ ports.TerminalActivityDetector = (*Plugin)(nil)
 var _ ports.TerminalSurfaceInspector = (*Plugin)(nil)
 var _ ports.SubmitActivitySignaler = (*Plugin)(nil)
 var _ ports.BlockedActivitySignaler = (*Plugin)(nil)
@@ -116,14 +117,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		cmd = append(cmd, "--add-dir", cfg.WorkspacePath)
 	}
 
-	if cfg.DataDir != "" {
-		skillsDir := filepath.Join(cfg.DataDir, "skills")
-		if info, err := os.Stat(skillsDir); err == nil && info.IsDir() {
-			cmd = append(cmd, "--add-dir", skillsDir)
-		}
-	}
-
-	if cfg.Permissions == ports.PermissionModeAuto || cfg.Permissions == ports.PermissionModeBypassPermissions {
+	if cfg.Permissions == ports.PermissionModeBypassPermissions {
 		cmd = append(cmd, "--dangerously-skip-permissions")
 	}
 
@@ -159,14 +153,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		cmd = append(cmd, "--add-dir", cfg.Session.WorkspacePath)
 	}
 
-	if cfg.DataDir != "" {
-		skillsDir := filepath.Join(cfg.DataDir, "skills")
-		if info, err := os.Stat(skillsDir); err == nil && info.IsDir() {
-			cmd = append(cmd, "--add-dir", skillsDir)
-		}
-	}
-
-	if cfg.Permissions == ports.PermissionModeAuto || cfg.Permissions == ports.PermissionModeBypassPermissions {
+	if cfg.Permissions == ports.PermissionModeBypassPermissions {
 		cmd = append(cmd, "--dangerously-skip-permissions")
 	}
 
