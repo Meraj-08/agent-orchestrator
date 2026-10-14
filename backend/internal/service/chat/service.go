@@ -766,6 +766,12 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 			return nil, err
 		}
 	}
+	if !liveReconnect && cfg.Harness == domain.HarnessCopilot && cfg.ProviderConversationID != "" {
+		if err := sanitizeCopilotLoadedMode(ctx, conv); err != nil {
+			_ = cleanupUnpublishedConversation(conv, cfg.ProviderConversationID == "")
+			return nil, err
+		}
+	}
 	var liveRows ConversationRows
 	if liveReconnect {
 		if s.reader == nil {
@@ -2551,6 +2557,71 @@ func copilotComposerOptions(options []ports.ChatConfigOption) []ports.ChatConfig
 		out = append(out, option)
 	}
 	return out
+}
+
+func copilotDefaultModeChoice(choices []ports.ChatConfigOptionChoice) string {
+	for _, choice := range choices {
+		if isCopilotAutopilot(choice.Value) {
+			continue
+		}
+		if strings.EqualFold(choice.Name, "agent") || strings.HasSuffix(choice.Value, "#agent") || choice.Value == "agent" {
+			return choice.Value
+		}
+	}
+	for _, choice := range choices {
+		if strings.EqualFold(choice.Name, "plan") || strings.HasSuffix(choice.Value, "#plan") || choice.Value == "plan" {
+			return choice.Value
+		}
+	}
+	return ""
+}
+
+// sanitizeCopilotLoadedMode resets Copilot's mode to Agent if a resumed native
+// session was left in Autopilot. Autopilot enables allow-all inside Copilot
+// without AO's knowledge, which would let turns bypass default approvals.
+func sanitizeCopilotLoadedMode(ctx context.Context, conv ports.ChatConversation) error {
+	configurer, ok := conv.(ports.ChatConfigOptionController)
+	if !ok {
+		return fmt.Errorf("read Copilot session mode: config options unavailable for resumed conversation")
+	}
+	options, err := configurer.ListConfigOptions(ctx)
+	if err != nil {
+		return fmt.Errorf("read Copilot session mode: %w", err)
+	}
+	modeFound := false
+	for _, option := range options {
+		if option.ID == "mode" {
+			modeFound = true
+		}
+		if option.ID == "mode" && isCopilotAutopilot(option.Current.Select) {
+			target := copilotDefaultModeChoice(option.Choices)
+			if target == "" {
+				return fmt.Errorf("%w: Copilot session is in Autopilot mode and has no safe mode fallback", ports.ErrChatConfigOptionInvalid)
+			}
+			updated, err := configurer.SetConfigOption(ctx, "mode", ports.ChatConfigOptionValue{Select: target})
+			if err != nil {
+				return fmt.Errorf("reset Copilot Autopilot mode to %q: %w", target, err)
+			}
+			updatedModeFound := false
+			for _, opt := range updated {
+				if opt.ID != "mode" {
+					continue
+				}
+				updatedModeFound = true
+				if opt.Current.Select != target {
+					return fmt.Errorf("reset Copilot Autopilot mode: provider reports %q, want %q", opt.Current.Select, target)
+				}
+			}
+			if !updatedModeFound {
+				return fmt.Errorf("reset Copilot Autopilot mode: provider did not report the resulting mode")
+			}
+			return nil
+		}
+	}
+	if !modeFound {
+		return fmt.Errorf("read Copilot session mode: mode option unavailable for resumed conversation")
+	}
+	return nil
 }
 
 // copilotConfigOptionAllowed refuses the Copilot settings AO owns or hides.

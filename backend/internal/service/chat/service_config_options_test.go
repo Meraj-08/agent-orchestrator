@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -209,5 +210,121 @@ func TestCopilotConfigOptionAllowed(t *testing.T) {
 		if !tc.ok && !errors.Is(err, ports.ErrChatConfigOptionInvalid) {
 			t.Errorf("%s=%s: err = %v, want ErrChatConfigOptionInvalid", tc.id, tc.value, err)
 		}
+	}
+}
+
+type copilotTestConversation struct {
+	ports.ChatConversation
+	options    []ports.ChatConfigOption
+	setErr     error
+	retainMode bool
+}
+
+func (c *copilotTestConversation) ListConfigOptions(context.Context) ([]ports.ChatConfigOption, error) {
+	return append([]ports.ChatConfigOption(nil), c.options...), nil
+}
+
+func (c *copilotTestConversation) SetConfigOption(_ context.Context, id string, value ports.ChatConfigOptionValue) ([]ports.ChatConfigOption, error) {
+	if c.setErr != nil {
+		return nil, c.setErr
+	}
+	if !(id == "mode" && c.retainMode) {
+		for i := range c.options {
+			if c.options[i].ID == id {
+				c.options[i].Current = value
+			}
+		}
+	}
+	return append([]ports.ChatConfigOption(nil), c.options...), nil
+}
+
+func TestSanitizeCopilotLoadedModeResetsAutopilotToAgent(t *testing.T) {
+	const uri = "https://agentclientprotocol.com/protocol/session-modes#"
+	catalog := copilotCatalog()
+	for i := range catalog {
+		if catalog[i].ID == "mode" {
+			catalog[i].Current = ports.ChatConfigOptionValue{Select: uri + "autopilot"}
+		}
+	}
+	conv := &copilotTestConversation{options: catalog}
+	if err := sanitizeCopilotLoadedMode(context.Background(), conv); err != nil {
+		t.Fatalf("sanitizeCopilotLoadedMode failed: %v", err)
+	}
+	for _, opt := range conv.options {
+		if opt.ID == "mode" && opt.Current.Select != uri+"agent" {
+			t.Fatalf("provider mode = %q, want %q", opt.Current.Select, uri+"agent")
+		}
+	}
+}
+
+func TestSanitizeCopilotLoadedModePreservesPlanMode(t *testing.T) {
+	const uri = "https://agentclientprotocol.com/protocol/session-modes#"
+	catalog := copilotCatalog()
+	for i := range catalog {
+		if catalog[i].ID == "mode" {
+			catalog[i].Current = ports.ChatConfigOptionValue{Select: uri + "plan"}
+		}
+	}
+	conv := &copilotTestConversation{options: catalog}
+	if err := sanitizeCopilotLoadedMode(context.Background(), conv); err != nil {
+		t.Fatalf("sanitizeCopilotLoadedMode failed: %v", err)
+	}
+	for _, opt := range conv.options {
+		if opt.ID == "mode" && opt.Current.Select != uri+"plan" {
+			t.Fatalf("provider mode = %q, want %q", opt.Current.Select, uri+"plan")
+		}
+	}
+}
+
+func TestSanitizeCopilotLoadedModeFailsWhenModeOptionIsMissingOnResume(t *testing.T) {
+	conv := &copilotTestConversation{options: []ports.ChatConfigOption{{ID: "model"}}}
+	if err := sanitizeCopilotLoadedMode(context.Background(), conv); err == nil {
+		t.Fatal("sanitizeCopilotLoadedMode succeeded without a mode option on resume")
+	}
+}
+
+func TestSanitizeCopilotLoadedModeFailsWhenNoSafeFallbackExists(t *testing.T) {
+	const uri = "https://agentclientprotocol.com/protocol/session-modes#"
+	catalog := copilotCatalog()
+	for i := range catalog {
+		if catalog[i].ID == "mode" {
+			catalog[i].Current = ports.ChatConfigOptionValue{Select: uri + "autopilot"}
+			catalog[i].Choices = []ports.ChatConfigOptionChoice{{Value: "unknown", Name: "Unknown"}}
+		}
+	}
+	conv := &copilotTestConversation{options: catalog}
+	if err := sanitizeCopilotLoadedMode(context.Background(), conv); err == nil {
+		t.Fatal("sanitizeCopilotLoadedMode succeeded without a known safe mode")
+	}
+}
+
+func TestSanitizeCopilotLoadedModeFailsWhenProviderRetainsAutopilot(t *testing.T) {
+	const uri = "https://agentclientprotocol.com/protocol/session-modes#"
+	catalog := copilotCatalog()
+	for i := range catalog {
+		if catalog[i].ID == "mode" {
+			catalog[i].Current = ports.ChatConfigOptionValue{Select: uri + "autopilot"}
+		}
+	}
+	conv := &copilotTestConversation{options: catalog, retainMode: true}
+	if err := sanitizeCopilotLoadedMode(context.Background(), conv); err == nil {
+		t.Fatal("sanitizeCopilotLoadedMode succeeded when provider retained Autopilot; want error")
+	}
+}
+
+func TestSanitizeCopilotLoadedModeFailsWhenResetRejected(t *testing.T) {
+	const uri = "https://agentclientprotocol.com/protocol/session-modes#"
+	catalog := copilotCatalog()
+	for i := range catalog {
+		if catalog[i].ID == "mode" {
+			catalog[i].Current = ports.ChatConfigOptionValue{Select: uri + "autopilot"}
+		}
+	}
+	conv := &copilotTestConversation{
+		options: catalog,
+		setErr:  errors.New("provider rejected mode change"),
+	}
+	if err := sanitizeCopilotLoadedMode(context.Background(), conv); err == nil {
+		t.Fatal("sanitizeCopilotLoadedMode succeeded when provider rejected reset; want error")
 	}
 }
