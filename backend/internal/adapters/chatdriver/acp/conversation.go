@@ -574,8 +574,8 @@ func (c *conversation) applySessionOptions(ctx context.Context, options []Sessio
 	return nil
 }
 
-// setSessionOption sends one session/set_config_option and adopts the catalog
-// the agent returns.
+// setSessionOption sends one session/set_config_option and adopts any catalog
+// the agent returns, preserving the current catalog when it omits one.
 func (c *conversation) setSessionOption(ctx context.Context, sessionID string, option SessionOption) error {
 	if option.ID == "" || option.Value == "" {
 		return nil
@@ -608,7 +608,11 @@ func (c *conversation) setSessionOption(ctx context.Context, sessionID string, o
 		}
 		return fmt.Errorf("set ACP session option %q: %w", option.ID, err)
 	}
-	c.replaceConfigOptions(resp.ConfigOptions)
+	if len(resp.ConfigOptions) == 0 {
+		c.applyAcceptedConfigOption(option.ID, ports.ChatConfigOptionValue{Select: option.Value})
+	} else {
+		c.replaceConfigOptions(resp.ConfigOptions)
+	}
 	return nil
 }
 

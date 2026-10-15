@@ -4761,6 +4761,54 @@ func TestACPDriverAppliesLaunchSessionOptionsOnStartAndResume(t *testing.T) {
 	}
 }
 
+// A setter may accept a launch option without returning the catalog. Keep the
+// remaining advertised choices available for subsequent launch settings.
+func TestACPDriverPreservesCatalogAcrossLaunchOptionsWithoutReturnedCatalog(t *testing.T) {
+	catalog := []acpsdk.SessionConfigOption{
+		selectConfigOption("agent", "Agent", "", "default", "default", "copilot"),
+		selectConfigOption("allow_all", "Allow all", "", "off", "on", "off"),
+	}
+	agent := &fakeAgent{newConfig: catalog}
+	driver := New(Config{
+		Harness:      domain.HarnessCopilot,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		LaunchSessionOptions: func(LaunchConfig) []SessionOption {
+			return []SessionOption{{ID: "agent", Value: "copilot"}}
+		},
+		SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+			if settings.Approval == ports.PermissionModeBypassPermissions {
+				return []SessionOption{{ID: "allow_all", Value: "on"}}
+			}
+			return nil
+		},
+		RequireAdvertisedOptions: true,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		SessionID: domain.SessionID("sess1"), WorkspacePath: t.TempDir(),
+		Permissions: ports.PermissionModeBypassPermissions,
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer conv.Close()
+
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if got := agent.options["agent"]; got != "copilot" {
+		t.Errorf("agent option = %q, want copilot", got)
+	}
+	if got := agent.options["allow_all"]; got != "on" {
+		t.Errorf("allow_all option = %q, want on", got)
+	}
+	if agent.setCalls != 2 {
+		t.Errorf("set config calls = %d, want 2", agent.setCalls)
+	}
+}
+
 // RequireAdvertisedOptions makes an option the session never offered fail
 // instead of reaching an agent that would acknowledge and drop it.
 func TestACPDriverRequireAdvertisedOptionsRejectsUnadvertised(t *testing.T) {
