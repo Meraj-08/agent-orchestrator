@@ -3125,6 +3125,20 @@ func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) 
 		// runtime, so refuse when the exact agent AO launched for this generation
 		// is provably still running: replacing it would kill a live conversation
 		// and resume whatever native id the stray signal recorded (#6454).
+		//
+		// Reconcile the activity state from this live probe so the session no
+		// longer shows as exited and the refusal is not a dead end.
+		signal := ports.ActivitySignal{
+			Valid:            true,
+			State:            domain.ActivityIdle,
+			Event:            "liveness-probe",
+			LaunchID:         strings.TrimSpace(rec.Metadata.RuntimeLaunchID),
+			ExpectedRevision: &rec.Revision,
+			Timestamp:        m.clock(),
+		}
+		if err := m.lcm.ApplyActivitySignal(ctx, rec.ID, signal); err != nil {
+			m.logger.Warn("resume agent: reconcile live agent activity failed", "sessionID", rec.ID, "error", err)
+		}
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, ErrAgentNotExited)
 	}
 	if rec.HibernatedAt != nil {

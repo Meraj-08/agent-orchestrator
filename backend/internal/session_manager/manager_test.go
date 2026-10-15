@@ -2369,8 +2369,14 @@ func TestResumeAgent_RefusesTUIWhoseLaunchedAgentIsStillAlive(t *testing.T) {
 		t.Fatalf("resume replaced a live agent: restarted=%d created=%d destroyed=%d",
 			runtime.restarted, baseRuntime.created, baseRuntime.destroyed)
 	}
-	if got := st.sessions["mer-1"]; !reflect.DeepEqual(got, before) {
-		t.Fatalf("refused resume mutated session: got %+v, want %+v", got, before)
+	got := st.sessions["mer-1"]
+	if got.Activity.State != domain.ActivityIdle {
+		t.Fatalf("refused resume activity = %v, want %v", got.Activity.State, domain.ActivityIdle)
+	}
+	want := before
+	want.Activity = got.Activity
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("refused resume mutated session beyond activity reconciliation: got %+v, want %+v", got, want)
 	}
 }
 

@@ -904,11 +904,13 @@ retryProjection:
 			s.LatestAssistantUpdate = ""
 		}
 	}
-	// An explicit prompt submission is proof that an agent was relaunched in the
-	// preserved shell. Other same-generation callbacks may have been delayed
-	// behind the process-exit report and cannot resurrect an exited workload.
+	// An explicit prompt submission or authoritative liveness probe is proof
+	// that an agent remains alive in the preserved shell. Other same-generation
+	// callbacks may have been delayed behind the process-exit report and cannot
+	// resurrect an exited workload.
 	if rec.Activity.State == domain.ActivityExited && (s.Valid || s.SubagentID != "") && s.State != domain.ActivityExited &&
-		(s.State != domain.ActivityActive || s.Event != "user-prompt-submit") && !currentChatController {
+		(s.State != domain.ActivityActive || s.Event != "user-prompt-submit") && !currentChatController &&
+		s.Event != "liveness-probe" {
 		m.mu.Unlock()
 		return nil
 	}
@@ -1287,7 +1289,8 @@ func cursorResolvedExecutionKey(s ports.ActivitySignal) (string, bool) {
 // session. Generic active/tool events remain insufficient to clear blocked.
 func isTurnBoundaryEvent(event string) bool {
 	return event == "user-prompt-submit" || event == "stop" || event == "session-end" ||
-		event == "process-exited" || event == "chat.controller.stopped" || event == "permission-resolved"
+		event == "process-exited" || event == "chat.controller.stopped" || event == "permission-resolved" ||
+		event == "liveness-probe"
 }
 
 // applyToolPrecedenceLocked folds an event-tagged activity signal through the

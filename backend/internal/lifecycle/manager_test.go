@@ -1254,6 +1254,33 @@ func TestActivity_CurrentChatControllerResumesExitedWorkload(t *testing.T) {
 	}
 }
 
+func TestActivity_LivenessProbeResumesExitedWorkload(t *testing.T) {
+	m, st, _ := newManager()
+	rec := working("mer-1")
+	rec.Activity.State = domain.ActivityExited
+	rec.Metadata.RuntimeLaunchID = "launch-2"
+	st.sessions["mer-1"] = rec
+	signalAt := time.Unix(123, 0).UTC()
+
+	if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{
+		Valid:     true,
+		State:     domain.ActivityIdle,
+		Event:     "liveness-probe",
+		Timestamp: signalAt,
+		LaunchID:  "launch-2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := st.sessions["mer-1"]
+	if got.IsTerminated || got.Activity.State != domain.ActivityIdle {
+		t.Fatalf("liveness probe did not reconcile exited workload: %+v", got)
+	}
+	if !got.Activity.LastActivityAt.Equal(signalAt) {
+		t.Fatalf("last activity = %v, want %v", got.Activity.LastActivityAt, signalAt)
+	}
+}
+
 func TestActivity_StaleLaunchSignalIsIgnored(t *testing.T) {
 	m, st, _ := newManager()
 	rec := working("mer-1")
