@@ -258,7 +258,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onPageFocus: unsubscribe,
 				},
 				browserProfiles: {
-					list: async () => ({ profiles: [] }),
+					list: async () => ({ profiles: [], defaultProfileId: null }),
 					create: async (name: string) => {
 						const now = new Date().toISOString();
 						return { id: `fake-${name}`, name, createdAt: now, updatedAt: now };
@@ -269,6 +269,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					},
 					clear: async () => undefined,
 					delete: async () => undefined,
+					setDefault: async () => undefined,
 					discoverImportSources: async () => ({ sources: [] }),
 					import: async () => ({ sourceName: "", entries: [] }),
 					onImportProgress: () => () => undefined,
@@ -1124,7 +1125,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onPageFocus: unsubscribe,
 				},
 				browserProfiles: {
-					list: async () => ({ profiles: [] }),
+					list: async () => ({ profiles: [], defaultProfileId: null }),
 					create: async (name: string) => {
 						const now = new Date().toISOString();
 						return { id: `fake-${name}`, name, createdAt: now, updatedAt: now };
@@ -1135,6 +1136,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					},
 					clear: async () => undefined,
 					delete: async () => undefined,
+					setDefault: async () => undefined,
 					discoverImportSources: async () => ({ sources: [] }),
 					import: async () => ({ sourceName: "", entries: [] }),
 					onImportProgress: () => () => undefined,
