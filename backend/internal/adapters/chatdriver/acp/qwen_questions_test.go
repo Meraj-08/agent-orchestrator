@@ -159,8 +159,10 @@ func TestQwenUserQuestion_FlowAndRewriter(t *testing.T) {
 
 	var parsed struct {
 		Result struct {
-			Outcome struct{ OptionID string `json:"optionId"` } `json:"outcome"`
-			Answers map[string]string                           `json:"answers"`
+			Outcome struct {
+				OptionID string `json:"optionId"`
+			} `json:"outcome"`
+			Answers map[string]string `json:"answers"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(wireBuffer.Bytes(), &parsed); err != nil {

@@ -296,5 +296,3 @@ func (r *permissionResponseRewriter) Write(data []byte) (int, error) {
 func (r *permissionResponseRewriter) Close() error {
 	return r.inner.Close()
 }
-
-
