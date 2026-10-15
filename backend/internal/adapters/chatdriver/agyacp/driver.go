@@ -80,7 +80,7 @@ func buildConfig(plugin Plugin, resolve resolver, log *slog.Logger) acpdriver.Co
 			if err != nil {
 				return acpdriver.Launch{}, fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
 			}
-			env := make(map[string]string, len(cfg.Env)+1)
+			env := make(map[string]string, len(cfg.Env)+2)
 			for key, value := range cfg.Env {
 				env[key] = value
 			}
@@ -88,6 +88,9 @@ func buildConfig(plugin Plugin, resolve resolver, log *slog.Logger) acpdriver.Co
 				if harness := resolve.harnessPath(server); harness != "" {
 					env[harnessPathEnvVar] = harness
 				}
+			}
+			if env[disableWorkspaceTrustEnvVar] == "" {
+				env[disableWorkspaceTrustEnvVar] = "1"
 			}
 			return acpdriver.Launch{Command: server, Args: launchArgs(runtime.GOOS), Env: env}, nil
 		},

@@ -19,6 +19,10 @@ const serverPathEnvVar = "AO_AGY_ACP_SERVER_PATH"
 // when it is not on PATH, for example when agy_acp_server is a symlink.
 const harnessPathEnvVar = "ANTIGRAVITY_HARNESS_PATH"
 
+// disableWorkspaceTrustEnvVar tells agy_acp_server to treat all workspaces as
+// trusted for executing automated hooks, bypassing the interactive prompt.
+const disableWorkspaceTrustEnvVar = "AGY_ACP_DISABLE_WORKSPACE_TRUST"
+
 const harnessFileName = "localharness_external"
 
 // serverSpec is the user-installed Antigravity ACP server. Google ships it as a

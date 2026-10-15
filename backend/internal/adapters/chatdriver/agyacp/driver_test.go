@@ -182,10 +182,16 @@ func TestLaunchPointsTheServerAtItsHarness(t *testing.T) {
 	if launch.Command != server || !samePath(t, launch.Env[harnessPathEnvVar], harness) || launch.Env["PATH"] != "/usr/bin" {
 		t.Fatalf("launch = %+v", launch)
 	}
+	if launch.Env[disableWorkspaceTrustEnvVar] != "1" {
+		t.Fatalf("expected %s=1 in launch env, got %q", disableWorkspaceTrustEnvVar, launch.Env[disableWorkspaceTrustEnvVar])
+	}
 
-	launch, err = cfg.Launch(context.Background(), acpdriver.LaunchConfig{Env: map[string]string{harnessPathEnvVar: "/custom"}})
-	if err != nil || launch.Env[harnessPathEnvVar] != "/custom" {
-		t.Fatalf("an explicit %s was overridden: %+v, %v", harnessPathEnvVar, launch.Env, err)
+	launch, err = cfg.Launch(context.Background(), acpdriver.LaunchConfig{Env: map[string]string{
+		harnessPathEnvVar:           "/custom",
+		disableWorkspaceTrustEnvVar: "0",
+	}})
+	if err != nil || launch.Env[harnessPathEnvVar] != "/custom" || launch.Env[disableWorkspaceTrustEnvVar] != "0" {
+		t.Fatalf("an explicit %s or %s was overridden: %+v, %v", harnessPathEnvVar, disableWorkspaceTrustEnvVar, launch.Env, err)
 	}
 }
 

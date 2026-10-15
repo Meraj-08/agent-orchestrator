@@ -107,11 +107,10 @@ rather than as instructions.
 
 ## Known limitations
 
-- AO prepares Chat worktrees the same way as Terminal ones, so the Agy
-  workspace hooks (`.agents/hooks.json`) are present. Antigravity asks once per
-  new workspace, "Do you trust the authors of this workspace to execute
-  automated agent hooks?". Chat works either way: its activity comes from ACP
-  events.
+- AO prepares Chat worktrees the same way as Terminal ones, provisioning
+  workspace hooks (`.agents/hooks.json`). AO sets `AGY_ACP_DISABLE_WORKSPACE_TRUST=1`
+  in the server launch environment so `agy_acp_server` runs without prompting
+  for workspace hook trust.
 - Reattaching to a still-running provider after the daemon detaches
   (`Close` then `Resume`) left `session/set_mode` unanswered in testing.
   Resuming after the provider exits (`session/load`) works and is covered by the
