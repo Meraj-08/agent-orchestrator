@@ -2228,6 +2228,11 @@ func (s *Service) SetConfigOption(
 	if err != nil {
 		return nil, err
 	}
+	if len(options) == 0 {
+		if listed, listErr := configurer.ListConfigOptions(ctx); listErr == nil {
+			options = listed
+		}
+	}
 	options = permissionConfigOptions(record.Harness, options)
 	settings, _ := settingsFromConfigOptions(previous, options)
 	if record.Harness == domain.HarnessClaudeCode {

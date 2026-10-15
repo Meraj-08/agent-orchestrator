@@ -4809,6 +4809,53 @@ func TestACPDriverPreservesCatalogAcrossLaunchOptionsWithoutReturnedCatalog(t *t
 	}
 }
 
+// A setter may accept a change without returning the rebuilt catalog.
+// SetConfigOption returns nil so callers requiring an authoritative confirmation
+// can fail closed, while the in-memory catalog preserves the accepted option.
+func TestACPDriverSetConfigOptionReturnsNilWhenAgentOmitsCatalog(t *testing.T) {
+	catalog := []acpsdk.SessionConfigOption{
+		selectConfigOption("model", "Model", "", "sonnet", "sonnet", "opus"),
+	}
+	agent := &fakeAgent{newConfig: catalog}
+	driver := New(Config{
+		Harness:      domain.HarnessCopilot,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		SessionID: domain.SessionID("sess1"), WorkspacePath: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer conv.Close()
+
+	controller, ok := conv.(ports.ChatConfigOptionController)
+	if !ok {
+		t.Fatal("conversation does not implement ChatConfigOptionController")
+	}
+
+	// fakeAgent has setConfig == nil by default, so SetSessionConfigOption returns empty ConfigOptions.
+	updated, err := controller.SetConfigOption(context.Background(), "model", ports.ChatConfigOptionValue{Select: "opus"})
+	if err != nil {
+		t.Fatalf("SetConfigOption: %v", err)
+	}
+	if updated != nil {
+		t.Fatalf("SetConfigOption returned %v, want nil when provider omits catalog", updated)
+	}
+
+	options, err := controller.ListConfigOptions(context.Background())
+	if err != nil {
+		t.Fatalf("ListConfigOptions: %v", err)
+	}
+	if len(options) != 1 || options[0].Current.Select != "opus" {
+		t.Fatalf("preserved options = %v, want model=opus", options)
+	}
+}
+
 // RequireAdvertisedOptions makes an option the session never offered fail
 // instead of reaching an agent that would acknowledge and drop it.
 func TestACPDriverRequireAdvertisedOptionsRejectsUnadvertised(t *testing.T) {

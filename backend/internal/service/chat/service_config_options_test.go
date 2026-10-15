@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -215,9 +216,10 @@ func TestCopilotConfigOptionAllowed(t *testing.T) {
 
 type copilotTestConversation struct {
 	ports.ChatConversation
-	options    []ports.ChatConfigOption
-	setErr     error
-	retainMode bool
+	options           []ports.ChatConfigOption
+	setErr            error
+	retainMode        bool
+	omitSetterCatalog bool
 }
 
 func (c *copilotTestConversation) ListConfigOptions(context.Context) ([]ports.ChatConfigOption, error) {
@@ -235,6 +237,9 @@ func (c *copilotTestConversation) SetConfigOption(_ context.Context, id string, 
 		if c.options[i].ID == id {
 			c.options[i].Current = value
 		}
+	}
+	if c.omitSetterCatalog {
+		return nil, nil
 	}
 	return append([]ports.ChatConfigOption(nil), c.options...), nil
 }
@@ -327,5 +332,26 @@ func TestSanitizeCopilotLoadedModeFailsWhenResetRejected(t *testing.T) {
 	}
 	if err := sanitizeCopilotLoadedMode(context.Background(), conv); err == nil {
 		t.Fatal("sanitizeCopilotLoadedMode succeeded when provider rejected reset; want error")
+	}
+}
+
+func TestSanitizeCopilotLoadedModeFailsWhenSetterOmitsCatalog(t *testing.T) {
+	const uri = "https://agentclientprotocol.com/protocol/session-modes#"
+	catalog := copilotCatalog()
+	for i := range catalog {
+		if catalog[i].ID == "mode" {
+			catalog[i].Current = ports.ChatConfigOptionValue{Select: uri + "autopilot"}
+		}
+	}
+	// When the setter returns no catalog, SetConfigOption returns nil options.
+	// Even though the accepted value is preserved in the local cache, the safety
+	// reset must fail closed because the provider never reported the mode.
+	conv := &copilotTestConversation{options: catalog, omitSetterCatalog: true}
+	err := sanitizeCopilotLoadedMode(context.Background(), conv)
+	if err == nil {
+		t.Fatal("sanitizeCopilotLoadedMode succeeded when setter omitted catalog; want error")
+	}
+	if !strings.Contains(err.Error(), "provider did not report the resulting mode") {
+		t.Fatalf("err = %v, want 'provider did not report the resulting mode'", err)
 	}
 }
