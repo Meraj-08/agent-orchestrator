@@ -82,8 +82,14 @@ func bridgeConversation(srcDir, dstDir, conversationID string) error {
 		if err := syncBrainDir(srcBrain, dstBrain); err != nil {
 			return fmt.Errorf("bridge conversation brain %s: %w", conversationID, err)
 		}
-	} else if err != nil && !os.IsNotExist(err) {
+	} else if os.IsNotExist(err) {
+		if err := removeBrainDir(dstBrain); err != nil {
+			return fmt.Errorf("clean destination conversation brain %s: %w", conversationID, err)
+		}
+	} else if err != nil {
 		return fmt.Errorf("inspect conversation brain %s: %w", conversationID, err)
+	} else {
+		return fmt.Errorf("source conversation brain %s is not a directory", conversationID)
 	}
 
 	return nil
@@ -135,18 +141,42 @@ func copyFile(src, dst string) error {
 	return os.Rename(tmp, dst)
 }
 
-func syncBrainDir(src, dst string) error {
-	if info, err := os.Lstat(dst); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		if err := os.Remove(dst); err != nil {
-			return err
+func removeBrainDir(dir string) error {
+	info, err := os.Lstat(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
 		}
-	} else if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+	if info.Mode()&os.ModeSymlink != 0 {
+		return os.Remove(dir)
+	}
+	return os.RemoveAll(dir)
+}
+
+func syncBrainDir(src, dst string) error {
+	parent := filepath.Dir(dst)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return err
 	}
-	return copyDir(src, dst)
+
+	tmp := fmt.Sprintf("%s.tmp.%d", dst, os.Getpid())
+	_ = removeBrainDir(tmp)
+	if err := os.MkdirAll(tmp, 0o700); err != nil {
+		return err
+	}
+	defer func() { _ = removeBrainDir(tmp) }()
+
+	if err := copyDir(src, tmp); err != nil {
+		return err
+	}
+
+	if err := removeBrainDir(dst); err != nil {
+		return err
+	}
+
+	return os.Rename(tmp, dst)
 }
 
 func copyDir(src, dst string) error {
