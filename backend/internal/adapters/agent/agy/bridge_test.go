@@ -326,4 +326,3 @@ func TestBridgeBrainHandlesExistingSymlinksSafely(t *testing.T) {
 		t.Fatalf("outside file was deleted when absent-source cleaned symlink: %v", err)
 	}
 }
-
