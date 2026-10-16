@@ -49,6 +49,7 @@ import { readUpdateSettings, type UpdateSettings, type UpdateStatus } from "./ma
 import { readKeybindingOverrides, writeKeybindingOverrides } from "./main/keybinding-settings";
 import { readEditorSettings, writeEditorPreference } from "./main/editor-settings";
 import { createEditorHandoff } from "./main/editor-handoff";
+import { discoverMacTerminalApps } from "./main/mac-terminal-apps";
 import { registerCliLinkIpc } from "./main/cli-link-ipc";
 import { launchCommand } from "./main/launch-command";
 import { blocksRenderFrameNavigation } from "./main/render-frame-guard";
@@ -1067,6 +1068,9 @@ async function createWindowInternal(): Promise<void> {
 		disposeBrowserRuntimeLink();
 		keybindingRecordingActive = false;
 		if (windowComposition === composition) windowComposition = null;
+		// Vibrancy belongs to the closed window. The shell of a recreated window
+		// (macOS Quit keeps the process, then Dock reopen) asks for it again.
+		windowTranslucent = false;
 		void disposeBrowserViewHost()
 			.finally(() => {
 				composition.dispose();
@@ -1212,6 +1216,8 @@ const editorHandoff = createEditorHandoff({
 	},
 	realPath: (candidatePath) => realpath(candidatePath),
 	copyText: (text) => clipboard.writeText(text),
+	discoverTerminalApps: discoverMacTerminalApps,
+	readIcon: async (appPath) => (await app.getFileIcon(appPath, { size: "normal" })).toDataURL(),
 	logError: (message, error) => console.error(message, error),
 });
 
@@ -1404,6 +1410,9 @@ function daemonEnv(forceKeep = keepDaemonAlive(process.env)): NodeJS.ProcessEnv 
 		AO_OWNER,
 		AO_DATA_DIR: desktopDataDir,
 		AO_APP_RUN_ID: appRunId,
+        ...(process.platform === "darwin" ? { AO_WAKE_HELPER: app.isPackaged
+            ? path.join(process.resourcesPath, "wake-helper", "ao-wake")
+            : path.join(app.getAppPath(), "wake-helper", "ao-wake") } : {}),
 		// The browser runtime token is handed over through the child's private
 		// stdin pipe below. Never put it in the daemon environment, where a
 		// same-UID worker could inspect the parent process.
@@ -2311,9 +2320,9 @@ ipcMain.handle("sideChats:capture", async (event, closedSideId?: string, cancelC
 	return captureSideChatState(closedSideId, cancelClose);
 });
 
-ipcMain.handle("editorHandoff:getState", (event, sessionId: string) => {
+ipcMain.handle("editorHandoff:getState", (event, sessionId: string, options) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
-	return editorHandoff.getState(typeof sessionId === "string" ? sessionId : "");
+	return editorHandoff.getState(typeof sessionId === "string" ? sessionId : "", { refreshTerminals: options?.refreshTerminals === true });
 });
 ipcMain.handle("editorHandoff:open", (event, input) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
@@ -2359,7 +2368,9 @@ ipcMain.handle("theme:set-window-background", (_event, color: unknown) => {
 });
 
 ipcMain.handle("theme:set-window-translucent", (_event, enabled: unknown) => {
-	if (process.platform !== "darwin" || typeof enabled !== "boolean" || enabled === windowTranslucent) return;
+	// No early return when the value is unchanged: each new shell document asks
+	// again, and re-applying is cheap and recovers any native state that drifted.
+	if (process.platform !== "darwin" || typeof enabled !== "boolean") return;
 	if (!mainWindow || mainWindow.isDestroyed()) return;
 	windowTranslucent = enabled;
 	mainWindow.setVibrancy(enabled ? "under-window" : null);

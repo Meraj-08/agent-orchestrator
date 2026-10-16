@@ -299,8 +299,8 @@ func (c *conversation) captureHistoryUserChunk(chunk *acpsdk.SessionUpdateUserMe
 			// An absent message id cannot describe a reliable boundary. Keep
 			// contiguous chunks together; conforming agents (including Claude) send
 			// stable UUIDs, so this is only a compatibility fallback. Once the agent
-			// has answered, the next user chunk is a new prompt: Copilot sends no
-			// message ids, and merging its turns broke every checkpoint match.
+			// has answered, the next user chunk is a new prompt: merging id-less
+			// turns broke every checkpoint match on a Terminal to Chat switch.
 			messageID = c.history.turnUserID
 		} else {
 			c.history.fallbackID++

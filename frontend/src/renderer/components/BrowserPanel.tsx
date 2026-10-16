@@ -493,20 +493,6 @@ export function BrowserPanelView({
 		showRightFade: showTabsRightFade,
 	} = useTabScrollEdges([tabs.length]);
 	const previousTabCountRef = useRef(tabs.length);
-	// Vertical wheel scrolls the horizontal tab strip when it overflows — same
-	// affordance as the session terminal tabs (CenterPane.tsx).
-	useEffect(() => {
-		const element = tabScrollRef.current;
-		if (!element) return;
-		const handleWheel = (event: WheelEvent) => {
-			if (event.ctrlKey || event.metaKey || Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
-			if (event.deltaY === 0 || element.scrollWidth <= element.clientWidth) return;
-			event.preventDefault();
-			element.scrollBy({ left: event.deltaY });
-		};
-		element.addEventListener("wheel", handleWheel, { passive: false });
-		return () => element.removeEventListener("wheel", handleWheel);
-	}, [tabScrollRef]);
 
 	// Opening a tab (or a popup adding one) appends it, so reveal the newest.
 	useEffect(() => {
@@ -1866,18 +1852,16 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 					<span className="browser-panel__tab-title">{label.title}</span>
 				</button>
 			</BrowserControlTooltip>
-			{tab.url && tab.url !== "about:blank" ? (
-				<BrowserControlTooltip label={closeLabel}>
-					<button
-						aria-label={closeLabel}
-						className="browser-panel__tab-close"
-						onClick={() => onClose(tab.id)}
-						type="button"
-					>
-						<X aria-hidden="true" className="size-icon-base" />
-					</button>
-				</BrowserControlTooltip>
-			) : null}
+			<BrowserControlTooltip label={closeLabel}>
+				<button
+					aria-label={closeLabel}
+					className="browser-panel__tab-close"
+					onClick={() => onClose(tab.id)}
+					type="button"
+				>
+					<X aria-hidden="true" className="size-icon-base" />
+				</button>
+			</BrowserControlTooltip>
 		</div>
 	);
 });
@@ -1902,11 +1886,9 @@ export const BrowserTopTabDragOverlay = memo(function BrowserTopTabDragOverlay({
 				)}
 				<span className="browser-panel__tab-title">{label.title}</span>
 			</div>
-			{tab.url && tab.url !== "about:blank" ? (
-				<span className="browser-panel__tab-close">
-					<X aria-hidden="true" className="size-icon-base" />
-				</span>
-			) : null}
+			<span className="browser-panel__tab-close">
+				<X aria-hidden="true" className="size-icon-base" />
+			</span>
 		</div>
 	);
 });

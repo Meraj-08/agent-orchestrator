@@ -10,6 +10,7 @@ package registry
 import (
 	"log/slog"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	commandcodeagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/commandcode"
@@ -25,6 +26,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/qwen"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/unrealagent"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/agyacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/claudeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/commandcodeacp"
@@ -94,6 +96,7 @@ func Build(log *slog.Logger, onClaudeAuthRejected func()) *Registry {
 		deepseekharnessacp.New(deepseekharness.New(), log),
 		commandcodeacp.New(commandcodeagent.New(), log),
 		copilotacp.New(copilot.New(), log),
+		agyacp.New(agy.New(), log),
 	)
 }
 
