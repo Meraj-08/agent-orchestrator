@@ -90,6 +90,7 @@ type checkpointRecord struct {
 		Type      string          `json:"type"`
 		HookEvent string          `json:"hookEvent"`
 		Content   json.RawMessage `json:"content"`
+		Prompt    json.RawMessage `json:"prompt"`
 	} `json:"attachment"`
 	Message struct {
 		Content    json.RawMessage `json:"content"`
@@ -176,6 +177,11 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 	slices.Reverse(chain)
 	var turns []checkpointTurn
 	submissions := make(map[string]int)
+	// Input sent while Claude is mid-turn is written as a queued_command
+	// attachment inside that turn, followed by its submission hook, rather
+	// than as a new user record. Its text is the queued prompt.
+	queuedTexts := make(map[string]string)
+	queued, hasQueued := "", false
 	for _, record := range chain {
 		if record.Type == "user" {
 			if record.Meta && record.TurnCompanion {
@@ -200,6 +206,7 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 				continue
 			}
 			turns = append(turns, checkpointTurn{promptID: record.PromptID, userID: record.UUID, user: text, notice: notice})
+			hasQueued = false
 			continue
 		}
 		if len(turns) == 0 {
@@ -208,6 +215,14 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 		turn := &turns[len(turns)-1]
 		switch record.Type {
 		case "attachment":
+			if record.Attachment.Type == "queued_command" {
+				text, err := checkpointContent(record.Attachment.Prompt)
+				if err != nil {
+					return ports.NativeCheckpointBoundary{}, err
+				}
+				queued, hasQueued = text, true
+				continue
+			}
 			if record.Attachment.Type == "hook_additional_context" && record.Attachment.HookEvent == "UserPromptSubmit" {
 				var contents []string
 				if json.Unmarshal(record.Attachment.Content, &contents) != nil {
@@ -221,7 +236,11 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 						return ports.NativeCheckpointBoundary{}, checkpointUnsettled("ambiguous native submission attachment")
 					}
 					submissions[content] = len(turns) - 1
+					if hasQueued {
+						queuedTexts[content] = queued
+					}
 				}
+				hasQueued = false
 			}
 		case "assistant":
 			text, err := checkpointContent(record.Message.Content)
@@ -252,9 +271,17 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 		}
 		index, found := byPrompt[observation.PromptID]
 		if observation.Submission {
-			index, found = submissions[domain.NativeSubmissionContext(observation.SubmissionID)]
+			submission := domain.NativeSubmissionContext(observation.SubmissionID)
+			index, found = submissions[submission]
+			submitted := ""
+			if found {
+				submitted = turns[index].user
+				if text, ok := queuedTexts[submission]; ok {
+					submitted = text
+				}
+			}
 			if observation.SubmissionID == "" || !found ||
-				(!observation.Coordination && !domain.NativeCheckpointTextMatches(observation.Text, turns[index].user)) {
+				(!observation.Coordination && !domain.NativeCheckpointTextMatches(observation.Text, submitted)) {
 				return ports.NativeCheckpointBoundary{}, checkpointUnsettled("native submission attachment not flushed")
 			}
 		} else if !found {
