@@ -272,25 +272,27 @@ func TestNativeCheckpointIgnoresUnrelatedStringAttachmentContent(t *testing.T) {
 	}
 }
 
+func queuedCommandRecord(id, parent, prompt string) string {
+	return fmt.Sprintf(`{"type":"attachment","sessionId":"native","uuid":%q,"parentUuid":%q,"attachment":{"type":"queued_command","prompt":%q,"commandMode":"prompt"}}`, id, parent, prompt) + "\n"
+}
+
+func submissionHookRecord(id, parent string, n int) string {
+	return fmt.Sprintf(`{"type":"attachment","sessionId":"native","uuid":%q,"parentUuid":%q,"attachment":{"type":"hook_additional_context","hookEvent":"UserPromptSubmit","content":[%q]}}`,
+		id, parent, domain.NativeSubmissionContext(fmt.Sprintf("submission-%d", n))) + "\n"
+}
+
 // Issue #6870: input sent while Claude is mid-turn is written as a
 // queued_command attachment plus its submission hook inside the running turn,
 // not as a new user record. Its text must match the queued prompt.
 func TestNativeCheckpointQueuedCommandInsideTurn(t *testing.T) {
-	queuedCommand := func(id, parent, prompt string) string {
-		return fmt.Sprintf(`{"type":"attachment","sessionId":"native","uuid":%q,"parentUuid":%q,"attachment":{"type":"queued_command","prompt":%q,"commandMode":"prompt"}}`, id, parent, prompt) + "\n"
-	}
-	hook := func(id, parent string, n int) string {
-		return fmt.Sprintf(`{"type":"attachment","sessionId":"native","uuid":%q,"parentUuid":%q,"attachment":{"type":"hook_additional_context","hookEvent":"UserPromptSubmit","content":[%q]}}`,
-			id, parent, domain.NativeSubmissionContext(fmt.Sprintf("submission-%d", n))) + "\n"
-	}
 	transcript := func(secondQueued string) string {
 		source := `{"type":"user","sessionId":"native","uuid":"user-0","parentUuid":"","promptId":"prompt-0","message":{"content":"Write the notes"}}` + "\n"
-		source += hook("hook-0", "user-0", 0)
+		source += submissionHookRecord("hook-0", "user-0", 0)
 		source += `{"type":"assistant","sessionId":"native","uuid":"tool-call","parentUuid":"hook-0","message":{"content":[{"type":"text","text":"writing"}],"stop_reason":"tool_use"}}` + "\n"
-		source += queuedCommand("queued-1", "tool-call", "Also, make n8 about mango.")
-		source += hook("hook-1", "queued-1", 1)
-		source += queuedCommand("queued-2", "hook-1", secondQueued)
-		source += hook("hook-2", "queued-2", 2)
+		source += queuedCommandRecord("queued-1", "tool-call", "Also, make n8 about mango.")
+		source += submissionHookRecord("hook-1", "queued-1", 1)
+		source += queuedCommandRecord("queued-2", "hook-1", secondQueued)
+		source += submissionHookRecord("hook-2", "queued-2", 2)
 		source += `{"type":"assistant","sessionId":"native","uuid":"answer","parentUuid":"hook-2","message":{"content":[{"type":"text","text":"DONE-NOTES PLUM"}],"stop_reason":"end_turn"}}` + "\n"
 		return source
 	}
@@ -307,5 +309,42 @@ func TestNativeCheckpointQueuedCommandInsideTurn(t *testing.T) {
 	}
 	if _, err := verifyCheckpointTranscript(context.Background(), strings.NewReader(transcript("Something else.")), request); !errors.Is(err, ports.ErrChatHistoryUnsettled) {
 		t.Fatalf("queued text that does not match its submission was admitted: %v", err)
+	}
+}
+
+// A queued prompt belongs only to the submission hook whose parent is that
+// queued record. Text must never carry over to a hook elsewhere in the chain.
+func TestNativeCheckpointQueuedCommandBindsByAncestry(t *testing.T) {
+	const queued = "Also, make n8 about mango."
+	start := `{"type":"user","sessionId":"native","uuid":"user-0","parentUuid":"","promptId":"prompt-0","message":{"content":"Write the notes"}}` + "\n" +
+		submissionHookRecord("hook-0", "user-0", 0) +
+		`{"type":"assistant","sessionId":"native","uuid":"tool-call","parentUuid":"hook-0","message":{"content":[{"type":"text","text":"writing"}],"stop_reason":"tool_use"}}` + "\n"
+	answer := func(parent string) string {
+		return fmt.Sprintf(`{"type":"assistant","sessionId":"native","uuid":"answer","parentUuid":%q,"message":{"content":[{"type":"text","text":"DONE"}],"stop_reason":"end_turn"}}`, parent) + "\n"
+	}
+	tests := []struct {
+		name, transcript string
+	}{
+		{"record between queued command and its hook", start +
+			queuedCommandRecord("queued-1", "tool-call", queued) +
+			`{"type":"attachment","sessionId":"native","uuid":"reminder","parentUuid":"queued-1","attachment":{"type":"total_tokens_reminder"}}` + "\n" +
+			submissionHookRecord("hook-1", "reminder", 1) + answer("hook-1")},
+		{"hook whose parent is not the queued command", start +
+			queuedCommandRecord("queued-1", "tool-call", queued) +
+			`{"type":"assistant","sessionId":"native","uuid":"tool-call-2","parentUuid":"queued-1","message":{"content":[{"type":"text","text":"still writing"}],"stop_reason":"tool_use"}}` + "\n" +
+			submissionHookRecord("hook-1", "tool-call-2", 1) + answer("hook-1")},
+	}
+	evidence := checkpointEvidence(
+		domain.NativeCheckpointObservation{Submission: true, PromptID: "prompt-0", Text: "Write the notes"},
+		domain.NativeCheckpointObservation{Submission: true, PromptID: "prompt-0", Text: queued},
+		domain.NativeCheckpointObservation{PromptID: "prompt-0", Text: "DONE"})
+	request := ports.NativeCheckpointRequest{ProviderConversationID: "native", Evidence: evidence}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := verifyCheckpointTranscript(context.Background(), strings.NewReader(test.transcript), request)
+			if !errors.Is(err, ports.ErrChatHistoryUnsettled) {
+				t.Fatalf("queued text bound to an unrelated hook: boundary=%+v error=%v", got, err)
+			}
+		})
 	}
 }

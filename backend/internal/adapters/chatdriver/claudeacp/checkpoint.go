@@ -179,9 +179,10 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 	submissions := make(map[string]int)
 	// Input sent while Claude is mid-turn is written as a queued_command
 	// attachment inside that turn, followed by its submission hook, rather
-	// than as a new user record. Its text is the queued prompt.
+	// than as a new user record. The hook's parent is that queued record, so
+	// the pair is bound by ancestry, never by position in the chain.
 	queuedTexts := make(map[string]string)
-	queued, hasQueued := "", false
+	queuedByUUID := make(map[string]string)
 	for _, record := range chain {
 		if record.Type == "user" {
 			if record.Meta && record.TurnCompanion {
@@ -206,7 +207,6 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 				continue
 			}
 			turns = append(turns, checkpointTurn{promptID: record.PromptID, userID: record.UUID, user: text, notice: notice})
-			hasQueued = false
 			continue
 		}
 		if len(turns) == 0 {
@@ -220,7 +220,7 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 				if err != nil {
 					return ports.NativeCheckpointBoundary{}, err
 				}
-				queued, hasQueued = text, true
+				queuedByUUID[record.UUID] = text
 				continue
 			}
 			if record.Attachment.Type == "hook_additional_context" && record.Attachment.HookEvent == "UserPromptSubmit" {
@@ -236,11 +236,10 @@ func verifyCheckpointTranscript(ctx context.Context, input io.Reader, request po
 						return ports.NativeCheckpointBoundary{}, checkpointUnsettled("ambiguous native submission attachment")
 					}
 					submissions[content] = len(turns) - 1
-					if hasQueued {
+					if queued, ok := queuedByUUID[record.ParentUUID]; ok {
 						queuedTexts[content] = queued
 					}
 				}
-				hasQueued = false
 			}
 		case "assistant":
 			text, err := checkpointContent(record.Message.Content)
