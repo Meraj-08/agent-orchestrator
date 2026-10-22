@@ -23,9 +23,9 @@ func IsRoutineInternalCLICommand(commandPath string) bool {
 var routineInternalCLICommands = []string{
 	"ao status",
 	"ao session ls",
+	"ao session top",
 	"ao session get",
-	"ao session agent-switch ls",
-	"ao session handoff",
+	"ao session history",
 	"ao project ls",
 	"ao project get",
 	"ao orchestrator ls",
@@ -53,10 +53,6 @@ func CLIActorType(actorType, commandPath string) string {
 	}
 
 	if _, ok := legacyActorlessUserCLICommands[normalized]; ok {
-		return "user"
-	}
-	switch normalized {
-	case "ao session agent-switch", "ao session agent-switch ls", "ao session switch-agent":
 		return "user"
 	}
 	if normalized == "ao hooks" || normalized == "ao report" {
@@ -153,6 +149,11 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao project add":            {},
 	"ao project rm":             {},
 	"ao project set-config":     {},
+	"ao remote-host":            {},
+	"ao remote-host status":     {},
+	"ao remote-host enable":     {},
+	"ao remote-host disable":    {},
+	"ao render":                 {},
 	"ao review":                 {},
 	"ao review cancel":          {},
 	"ao review ls":              {},

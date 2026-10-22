@@ -172,6 +172,52 @@ var shippedMigrations = map[int64]string{
 	166: "0166_allow_deepseek_harness.sql",
 	167: "0167_allow_opencode_v2_harness.sql",
 	168: "0168_cues.sql",
+	169: "0169_reported_pr_cdc.sql",
+	170: "0170_review_result_notifications.sql",
+	171: "0171_shell_preview_capability.sql",
+	172: "0172_client_task_requests.sql",
+	173: "0173_chat_client_payload_hash.sql",
+	174: "0174_conversation_account_cdc.sql",
+	175: "0175_codex_subagent_activity.sql",
+	176: "0176_claude_subagent_activity.sql",
+	177: "0177_review_run_rerun_same_head.sql",
+	178: "0178_archive_reviewers.sql",
+	179: "0179_conversation_message_sender.sql",
+	180: "0180_session_provision_steps.sql",
+	181: "0181_session_artifacts.sql",
+	185: "0185_worktree_startup_cues.sql",
+	186: "0186_remove_cue_description.sql",
+	187: "0187_remove_cue_startup_options.sql",
+	// 188 removes the obsolete cue worktree-startup schema; project setup now
+	// owns automatic workspace initialization.
+	188: "0188_remove_worktree_startup_cues.sql",
+	189: "0189_session_interaction.sql",
+	190: "0190_session_hibernation.sql",
+	191: "0191_session_branch_state.sql",
+	192: "0192_allow_openhands_harness.sql",
+	193: "0193_allow_codewhale_harness.sql",
+	194: "0194_allow_command_code_harness.sql",
+	195: "0195_session_requested_output.sql",
+	196: "0196_session_artifact_versions.sql",
+	197: "0197_detach_split_orchestrator_conversations.sql",
+	198: "0198_harness_defaults.sql",
+	199: "0199_conversation_message_continuation.sql",
+	200: "0200_session_artifact_version_source.sql",
+	202: "0202_allow_memcode_harness.sql",
+	// 0203 was an unmerged Hermes candidate; retain its reservation.
+	206: "0206_awake.sql",
+	210: "0210_agent_accounts.sql",
+	211: "0211_account_transitions.sql",
+	212: "0212_session_runtime_released.sql",
+	213: "0213_session_stale_binary.sql",
+	214: "0214_app_settings_version_refresh.sql",
+	215: "0215_session_harness_releases.sql",
+
+	20261019142324385: "20261019142324385_allow_hermes_harness.sql",
+	20261019220421171: "20261019220421171_usage_limit_auto_resume.sql",
+	20261019220421514: "20261019220421514_usage_limit_reset_cdc.sql",
+	20261020131539535: "20261020131539535_provider_switching.sql",
+	20261021230230412: "20261021230230412_provider_events_session_index.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
@@ -187,7 +233,8 @@ var shippedMigrations = map[int64]string{
 // Any such migration whose schema the generated queries depend on must add a
 // schemaRepairs entry in db.go.
 func burnedVersion(v int64) bool {
-	return v == 22
+	// 203 was used by the historical Hermes candidate and must not be reused.
+	return v == 22 || v == 203
 }
 
 // TestMigrationVersionLedger enforces the append-only migration ledger: every

@@ -47,12 +47,25 @@ type PullRequest struct {
 	UpdatedAt          time.Time
 }
 
+// PullRequestOpener is the person who started the session behind a pull
+// request: their AO name and, when they connected GitHub to AO, their GitHub
+// login and avatar.
+type PullRequestOpener struct {
+	Name        string
+	GitHubLogin string
+	AvatarURL   string
+}
+
 // RaisePullRequest is the input to open a new pull request for a session.
 type RaisePullRequest struct {
 	Title      string
 	Body       string
 	HeadBranch string
 	BaseBranch string
+	// Repository is the owner/name of the project repository to open the pull
+	// request in; empty means the main repository. Any other value must be
+	// one of the project's additional repositories.
+	Repository string
 }
 
 // PullRequestRef identifies a pull request for background status polling.
@@ -187,15 +200,21 @@ type PullRequestTransition struct {
 
 // ReviewRun is one automated review of a pull request commit.
 type ReviewRun struct {
-	ID               string
-	OrgID            string
-	PullRequestID    string
-	ReviewSessionID  string
-	TargetSHA        string
+	ID              string
+	OrgID           string
+	PullRequestID   string
+	ReviewSessionID string
+	TargetSHA       string
+	// Harness is the coding-agent provider that executed this particular pass.
+	Harness          string
+	TriggerSource    string
 	Status           contract.AOReviewRunStatus
 	Verdict          contract.AOReviewVerdict
 	Body             string
 	ProviderReviewID string
+	// ReviewTerminalID identifies the short-lived agent terminal running this
+	// pass. It is empty for runs created before dedicated reviewer terminals.
+	ReviewTerminalID string
 	LastError        string
 	CreatedAt        time.Time
 	CompletedAt      *time.Time
