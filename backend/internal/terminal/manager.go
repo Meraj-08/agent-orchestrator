@@ -73,12 +73,26 @@ type Manager struct {
 	inputLeaseMu sync.RWMutex
 	inputLease   sessionguard.InputLease
 
-	// inputMu makes BeginInputDrain atomic with pane writes. Once a drain returns,
-	// every write that began before it has finished and every later write is
-	// refused until the matching release runs.
+	// inputMu guards inputBlocked and lastInputAt. It is held only briefly, never
+	// across a pane write.
 	inputMu      sync.Mutex
 	inputBlocked map[string]int
 	lastInputAt  map[string]time.Time
+
+	// fences holds one write fence per terminal id. Every pane write for that
+	// terminal holds it — a keystroke, and input buffered during attach as it is
+	// replayed — and so do BeginInputDrain and HoldInput, so they order against
+	// those writes without stalling any other terminal's input. Lock order: a
+	// fence, then inputMu.
+	fencesMu sync.Mutex
+	fences   map[string]*inputFence
+}
+
+// inputFence serializes one terminal's pane writes. refs counts holders and
+// waiters so the entry is dropped once nobody needs it.
+type inputFence struct {
+	mu   sync.Mutex
+	refs int
 }
 
 // sharedTerm tracks every client currently viewing one terminal id (one PTY) so
@@ -143,6 +157,7 @@ func NewManager(src Source, events EventSource, log *slog.Logger, opts ...Option
 		shared:       map[string]*sharedTerm{},
 		inputBlocked: map[string]int{},
 		lastInputAt:  map[string]time.Time{},
+		fences:       map[string]*inputFence{},
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -150,13 +165,39 @@ func NewManager(src Source, events EventSource, log *slog.Logger, opts ...Option
 	return m
 }
 
+// lockInputFence takes terminalID's write fence and returns its unlock.
+func (m *Manager) lockInputFence(terminalID string) (unlock func()) {
+	m.fencesMu.Lock()
+	f := m.fences[terminalID]
+	if f == nil {
+		f = &inputFence{}
+		m.fences[terminalID] = f
+	}
+	f.refs++
+	m.fencesMu.Unlock()
+	f.mu.Lock()
+	return func() {
+		f.mu.Unlock()
+		m.fencesMu.Lock()
+		f.refs--
+		if f.refs == 0 {
+			delete(m.fences, terminalID)
+		}
+		m.fencesMu.Unlock()
+	}
+}
+
 // BeginInputDrain blocks new user input for one terminal while Session Manager
-// hands its controller to another interface. The returned release is idempotent.
+// hands its controller to another interface. Once it returns, every write that
+// began before it has finished (it waits on the terminal's fence) and every later
+// write is refused until the matching release runs. The release is idempotent.
 func (m *Manager) BeginInputDrain(terminalID string) (lastInputAt time.Time, release func()) {
+	unlock := m.lockInputFence(terminalID)
 	m.inputMu.Lock()
 	m.inputBlocked[terminalID]++
 	lastInputAt = m.lastInputAt[terminalID]
 	m.inputMu.Unlock()
+	unlock()
 
 	var once sync.Once
 	return lastInputAt, func() {
@@ -181,19 +222,26 @@ func (m *Manager) LastInputAt(terminalID string) time.Time {
 	return m.lastInputAt[terminalID]
 }
 
-// HoldInput takes the pane-write mutex and returns a release. Unlike
+// HoldInput takes one terminal's write fence and returns a release. Unlike
 // BeginInputDrain, it does NOT set inputBlocked, so a concurrent keystroke is not
-// dropped: its writeInput blocks on inputMu until release and then writes. Session
-// Manager holds it across the composer-draft confirmation and the pane write so a
-// human keystroke cannot land between the final empty-frame proof and the paste
-// (#5711). Hold it only briefly; keystrokes queue for its duration. The release is
-// idempotent.
-func (m *Manager) HoldInput(terminalID string) (release func()) {
+// dropped: its writeInput blocks on the fence until release and then writes, and
+// input buffered during an attach waits the same way. Other terminals are not
+// fenced. Session Manager holds it across the composer-draft confirmation and the
+// pane write so a human keystroke cannot land between the final empty-frame proof
+// and the paste (#5711). Hold it only briefly; this terminal's keystrokes queue
+// for its duration.
+//
+// lastInputAt is read under the fence, so no keystroke accepted after it can
+// reach the pane until release; one accepted just before may still be rendering,
+// which is why the caller settles on it before trusting the screen. The release
+// is idempotent.
+func (m *Manager) HoldInput(terminalID string) (lastInputAt time.Time, release func()) {
+	unlock := m.lockInputFence(terminalID)
 	m.inputMu.Lock()
+	lastInputAt = m.lastInputAt[terminalID]
+	m.inputMu.Unlock()
 	var once sync.Once
-	return func() {
-		once.Do(func() { m.inputMu.Unlock() })
-	}
+	return lastInputAt, func() { once.Do(unlock) }
 }
 
 // TerminalOnScreen reports whether a client is showing the terminal. A client
@@ -212,14 +260,18 @@ func (m *Manager) TerminalOnScreen(terminalID string) bool {
 }
 
 func (m *Manager) writeInput(terminalID string, a *attachment, raw []byte, release func()) {
+	typed := !terminalReports.Match(raw)
+	unlock := m.lockInputFence(terminalID)
+	defer unlock()
 	m.inputMu.Lock()
-	defer m.inputMu.Unlock()
-	if m.inputBlocked[terminalID] > 0 {
+	blocked := m.inputBlocked[terminalID] > 0
+	if !blocked && typed {
+		m.lastInputAt[terminalID] = time.Now()
+	}
+	m.inputMu.Unlock()
+	if blocked {
 		release()
 		return
-	}
-	if !terminalReports.Match(raw) {
-		m.lastInputAt[terminalID] = time.Now()
 	}
 	_ = a.writeLeased(raw, release)
 }
@@ -514,6 +566,7 @@ func (c *connState) openTerminal(id string, rows, cols uint16, role string) {
 			c.enqueue(serverMsg{Ch: chTerminal, ID: id, Type: msgExited})
 		},
 		c.mgr.log)
+	a.lockInput = func() func() { return c.mgr.lockInputFence(id) }
 	if err := c.mgr.track(a); err != nil {
 		c.enqueue(serverMsg{Ch: chTerminal, ID: id, Type: msgError, Error: err.Error()})
 		return

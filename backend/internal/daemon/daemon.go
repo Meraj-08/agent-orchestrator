@@ -104,6 +104,15 @@ func sentryEnvironment(version string) string {
 	}
 }
 
+// Session Manager asserts the terminal input gate's optional capabilities at
+// runtime: a signature drift compiles but silently turns the send guard's
+// keystroke fence off (#5711).
+var _ interface {
+	sessionmanager.TerminalInputGate
+	sessionmanager.TerminalInputObserver
+	sessionmanager.TerminalInputFencer
+} = (*terminal.Manager)(nil)
+
 // Run starts the daemon and blocks until it exits. SIGINT/SIGTERM drive
 // graceful shutdown through the HTTP server and background workers.
 func Run(buildVersion string) error {

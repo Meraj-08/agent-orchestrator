@@ -275,13 +275,14 @@ type TerminalInputObserver interface {
 	LastInputAt(terminalID string) time.Time
 }
 
-// TerminalInputFencer is an optional TerminalInputGate capability: it holds the
-// pane-write mutex so a keystroke cannot interleave with an AO write, without
-// dropping it (the keystroke blocks until release, unlike a drain). The composer
-// guard holds it across the final draft proof and the paste so a human keystroke
-// cannot land between them (#5711).
+// TerminalInputFencer is an optional TerminalInputGate capability: it holds one
+// terminal's write fence so a keystroke cannot interleave with an AO write,
+// without dropping it (the keystroke blocks until release, unlike a drain). The
+// composer guard holds it across the final draft proof and the paste so a human
+// keystroke cannot land between them (#5711). lastInputAt is the newest
+// keystroke accepted before the fence closed, read under it.
 type TerminalInputFencer interface {
-	HoldInput(terminalID string) (release func())
+	HoldInput(terminalID string) (lastInputAt time.Time, release func())
 }
 
 // ReviewerTerminator tears down a worker's reviewer pane when the worker leaves
@@ -672,22 +673,23 @@ func (m *Manager) lastTerminalInputAt(rec domain.SessionRecord) time.Time {
 	return observer.LastInputAt(handle.ID)
 }
 
-// fenceTerminalInput holds a TUI session's pane-write mutex so a human keystroke
-// cannot interleave with the pane write the caller is about to make; keystrokes
-// block (not dropped) until release. It returns nil when there is nothing to
-// fence (non-TUI, no handle, no gate, or a gate without the fencer capability),
-// in which case the caller proceeds unsynchronized exactly as before.
-func (m *Manager) fenceTerminalInput(rec domain.SessionRecord) (release func()) {
+// fenceTerminalInput holds a TUI session's terminal write fence so a human
+// keystroke cannot interleave with the pane write the caller is about to make;
+// keystrokes block (not dropped) until release. lastInputAt is the newest
+// keystroke accepted before the fence closed. release is nil when there is
+// nothing to fence (non-TUI, no handle, no gate, or a gate without the fencer
+// capability), in which case the caller proceeds unsynchronized exactly as before.
+func (m *Manager) fenceTerminalInput(rec domain.SessionRecord) (lastInputAt time.Time, release func()) {
 	handle := runtimeHandle(rec.Metadata)
 	if domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeTUI || handle.ID == "" {
-		return nil
+		return time.Time{}, nil
 	}
 	m.terminalInputGateMu.Lock()
 	gate := m.terminalInputGate
 	m.terminalInputGateMu.Unlock()
 	fencer, ok := gate.(TerminalInputFencer)
 	if !ok {
-		return nil
+		return time.Time{}, nil
 	}
 	return fencer.HoldInput(handle.ID)
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -359,9 +360,57 @@ func (g *fencingInputGate) BeginInputDrain(string) (time.Time, func()) {
 	return time.Time{}, func() {}
 }
 func (g *fencingInputGate) LastInputAt(string) time.Time { return time.Time{} }
-func (g *fencingInputGate) HoldInput(string) func() {
+func (g *fencingInputGate) HoldInput(string) (time.Time, func()) {
 	g.held++
-	return func() { g.released++ }
+	return time.Time{}, func() { g.released++ }
+}
+
+// lateKeystrokeGate models a keystroke accepted during the unfenced probe, just
+// before the fence closed, that the TUI draws only after renderDelay.
+type lateKeystrokeGate struct {
+	renderDelay time.Duration
+	mu          sync.Mutex
+	keyAt       time.Time
+}
+
+func (g *lateKeystrokeGate) BeginInputDrain(string) (time.Time, func()) {
+	return time.Time{}, func() {}
+}
+func (g *lateKeystrokeGate) LastInputAt(string) time.Time { return time.Time{} }
+func (g *lateKeystrokeGate) HoldInput(string) (time.Time, func()) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.keyAt = time.Now()
+	return g.keyAt, func() {}
+}
+
+func (g *lateKeystrokeGate) frame(int) string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.keyAt.IsZero() && time.Since(g.keyAt) >= g.renderDelay {
+		return draftTerminalOutput
+	}
+	return idleTerminalOutput
+}
+
+func TestComposerBusyCheck_FencedRecheckWaitsForAKeystrokeToRender(t *testing.T) {
+	// Holding the fence stops later keystrokes, but one accepted during the probe
+	// may not be on screen yet. The fenced re-check must settle on the newest
+	// keystroke the fence reports before capturing, or it reads the still-empty
+	// composer and pastes onto the human's input (#5711).
+	gate := &lateKeystrokeGate{renderDelay: 30 * time.Millisecond}
+	m, rt, _ := draftProbeManager(transitionSurfaceAgent{}, idleTerminalOutput)
+	m.interfaceTransition.idleSettle = 80 * time.Millisecond
+	rt.outputForCall = gate.frame
+	m.SetTerminalInputGate(gate)
+
+	busy, release := m.composerBusyCheck()(context.Background(), draftProbeRecord(domain.ActivityIdle))
+	if release != nil {
+		release()
+	}
+	if !busy {
+		t.Fatal("the fenced re-check captured before the newest keystroke rendered and delivered onto it")
+	}
 }
 
 func TestComposerBusyCheck_FencedRecheckCatchesDraftAfterProbe(t *testing.T) {

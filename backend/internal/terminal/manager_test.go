@@ -269,7 +269,7 @@ func TestHoldInputBlocksMuxWritesButDoesNotDropThem(t *testing.T) {
 	// WITHOUT dropping them (unlike BeginInputDrain): a keystroke arriving while
 	// the fence is held must wait on inputMu and then be written once released,
 	// so it can neither interleave with the AO write nor be lost (#5711). Run
-	// under -race to prove the keystroke path and the fence share one mutex.
+	// under -race to prove the keystroke path and the fence share one lock.
 	pty := newFakePTY()
 	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{pty}}}, nil, testLogger(), WithHeartbeat(0))
 	defer mgr.Close()
@@ -282,10 +282,10 @@ func TestHoldInputBlocksMuxWritesButDoesNotDropThem(t *testing.T) {
 	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgOpen}
 	recv(t, conn, chTerminal, msgOpened, time.Second)
 
-	release := mgr.HoldInput("t1")
+	_, release := mgr.HoldInput("t1")
 	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("queued\n"))}
-	// While the fence is held the keystroke's writeInput blocks on inputMu, so it
-	// has neither reached the pane nor been dropped.
+	// While the fence is held the keystroke's writeInput blocks on it, so it has
+	// neither reached the pane nor been dropped.
 	time.Sleep(100 * time.Millisecond)
 	if got := string(pty.writtenBytes()); got != "" {
 		t.Fatalf("fenced keystroke reached the pane before release: %q", got)
@@ -295,6 +295,79 @@ func TestHoldInputBlocksMuxWritesButDoesNotDropThem(t *testing.T) {
 	release() // idempotent.
 	// Released, not dropped: the keystroke is now written.
 	eventually(t, time.Second, func() bool { return string(pty.writtenBytes()) == "queued\n" })
+}
+
+func TestHoldInputFencesInputBufferedDuringAttach(t *testing.T) {
+	// A keystroke typed while the attach is still in flight is buffered and
+	// replayed by setPTY. That replay is a pane write like any other: it must
+	// wait for a held fence, or a draft lands after the guard's final empty-frame
+	// proof and concatenates with AO's paste (#5711).
+	pty := newFakePTY()
+	attached := make(chan struct{})
+	src := &fakeSource{alive: true, attachFn: func(ctx context.Context, _, _ uint16) (ports.Stream, error) {
+		select {
+		case <-attached:
+			return pty, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}}
+	mgr := NewManager(src, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+
+	conn := newFakeConn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go mgr.Serve(ctx, conn)
+
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgOpen}
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("draft"))}
+	eventually(t, time.Second, func() bool { return !mgr.LastInputAt("t1").IsZero() })
+
+	lastInputAt, release := mgr.HoldInput("t1")
+	defer release()
+	if lastInputAt.IsZero() {
+		t.Fatal("HoldInput did not report the buffered keystroke")
+	}
+	close(attached)
+	recv(t, conn, chTerminal, msgOpened, time.Second)
+	time.Sleep(100 * time.Millisecond)
+	if got := string(pty.writtenBytes()); got != "" {
+		t.Fatalf("buffered input reached the pane while the fence was held: %q", got)
+	}
+
+	release()
+	eventually(t, time.Second, func() bool { return string(pty.writtenBytes()) == "draft" })
+}
+
+func TestHoldInputLeavesOtherTerminalsTyping(t *testing.T) {
+	// The fence is per terminal: a send holding t1's fence must not stall
+	// typing in t2.
+	p1, p2 := newFakePTY(), newFakePTY()
+	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{p1, p2}}}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+
+	conn := newFakeConn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go mgr.Serve(ctx, conn)
+
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgOpen}
+	recv(t, conn, chTerminal, msgOpened, time.Second)
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t2", Type: msgOpen}
+	recv(t, conn, chTerminal, msgOpened, time.Second)
+
+	_, release := mgr.HoldInput("t1")
+	defer release()
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t2", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("typed"))}
+	eventually(t, time.Second, func() bool { return string(p2.writtenBytes()) == "typed" })
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("held"))}
+	time.Sleep(50 * time.Millisecond)
+	if got := string(p1.writtenBytes()); got != "" {
+		t.Fatalf("t1's keystroke passed its held fence: %q", got)
+	}
+	release()
+	eventually(t, time.Second, func() bool { return string(p1.writtenBytes()) == "held" })
 }
 
 func TestBeginInputDrainReturnsTheLastAcceptedWriteBarrier(t *testing.T) {
