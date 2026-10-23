@@ -270,6 +270,15 @@ type TerminalInputObserver interface {
 	LastInputAt(terminalID string) time.Time
 }
 
+// TerminalInputFencer is an optional TerminalInputGate capability: it holds the
+// pane-write mutex so a keystroke cannot interleave with an AO write, without
+// dropping it (the keystroke blocks until release, unlike a drain). The composer
+// guard holds it across the final draft proof and the paste so a human keystroke
+// cannot land between them (#5711).
+type TerminalInputFencer interface {
+	HoldInput(terminalID string) (release func())
+}
+
 // ReviewerTerminator tears down a worker's reviewer pane when the worker leaves
 // its live lifecycle. It is late-bound like ShellTerminalCloser because review
 // services are assembled after the session manager in daemon wiring.
@@ -650,6 +659,26 @@ func (m *Manager) lastTerminalInputAt(rec domain.SessionRecord) time.Time {
 		return time.Time{}
 	}
 	return observer.LastInputAt(handle.ID)
+}
+
+// fenceTerminalInput holds a TUI session's pane-write mutex so a human keystroke
+// cannot interleave with the pane write the caller is about to make; keystrokes
+// block (not dropped) until release. It returns nil when there is nothing to
+// fence (non-TUI, no handle, no gate, or a gate without the fencer capability),
+// in which case the caller proceeds unsynchronized exactly as before.
+func (m *Manager) fenceTerminalInput(rec domain.SessionRecord) (release func()) {
+	handle := runtimeHandle(rec.Metadata)
+	if domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeTUI || handle.ID == "" {
+		return nil
+	}
+	m.terminalInputGateMu.Lock()
+	gate := m.terminalInputGate
+	m.terminalInputGateMu.Unlock()
+	fencer, ok := gate.(TerminalInputFencer)
+	if !ok {
+		return nil
+	}
+	return fencer.HoldInput(handle.ID)
 }
 
 // beginShellTerminalTeardown starts the shell-terminal gate for id ahead of
@@ -5062,12 +5091,13 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 		}
 	}
 	// A non-empty send must not land in a composer that holds an unsent human
-	// draft (#5711). An empty message is the deliberate Enter that submits an
-	// existing draft, and an internal report delivery has no durable queue to
-	// retry a refusal from, so both are left unchecked. The check runs under the
+	// draft (#5711), whether it is an ao send or a worker report: a refused report
+	// is released and retried by report.Coordinator (ReleaseReportBatch), so draft
+	// protection does not lose it. Only an empty message is left unchecked — it is
+	// the deliberate Enter that submits an existing draft. The check runs under the
 	// guard's held input lease, immediately before the write.
-	var composerBusy func(context.Context, domain.SessionRecord) bool
-	if strings.TrimSpace(message) != "" && !coordinationDelivery {
+	var composerBusy func(context.Context, domain.SessionRecord) (bool, func())
+	if strings.TrimSpace(message) != "" {
 		composerBusy = m.composerBusyCheck()
 	}
 	outcome, err := m.messenger.DeliverWithComposerCheck(ctx, id, message, composerBusy, afterWrite)

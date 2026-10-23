@@ -181,6 +181,21 @@ func (m *Manager) LastInputAt(terminalID string) time.Time {
 	return m.lastInputAt[terminalID]
 }
 
+// HoldInput takes the pane-write mutex and returns a release. Unlike
+// BeginInputDrain, it does NOT set inputBlocked, so a concurrent keystroke is not
+// dropped: its writeInput blocks on inputMu until release and then writes. Session
+// Manager holds it across the composer-draft confirmation and the pane write so a
+// human keystroke cannot land between the final empty-frame proof and the paste
+// (#5711). Hold it only briefly; keystrokes queue for its duration. The release is
+// idempotent.
+func (m *Manager) HoldInput(terminalID string) (release func()) {
+	m.inputMu.Lock()
+	var once sync.Once
+	return func() {
+		once.Do(func() { m.inputMu.Unlock() })
+	}
+}
+
 // TerminalOnScreen reports whether a client is showing the terminal. A client
 // without a grid keeps it parked off screen: it attached without one, or gave
 // it up with a 0x0 resize when its pane or window was hidden. (Same signal as

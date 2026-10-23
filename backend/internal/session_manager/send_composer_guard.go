@@ -31,7 +31,8 @@ const (
 // keystroke has settled.
 //
 // It fails OPEN (returns false, so the send is delivered) on every case it
-// cannot prove: a non-TUI session, a turn that is not at a prompt, a harness or
+// cannot prove: a non-TUI session, a durable state that cannot hold a draft
+// (anything but idle, waiting-input, or active), a harness or
 // runtime that cannot read the screen, a capture error, a provider-owned screen,
 // a draft that does not persist across sendComposerDraftSamples captures, or a
 // probe that runs out of time.
@@ -44,9 +45,14 @@ func (m *Manager) composerHoldsDraft(ctx context.Context, rec domain.SessionReco
 	if domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeTUI {
 		return false
 	}
-	// Only a prompt can hold an unsent human draft. An active turn is the agent
-	// working, and a blocked decision is already refused upstream.
-	if rec.Activity.State != domain.ActivityIdle && rec.Activity.State != domain.ActivityWaitingInput {
+	// Idle, waiting-input, and active turns can all have an editable composer
+	// holding an unsent human follow-up draft: the Claude/Codex inspectors report
+	// a composer independently of work state, so an active turn is not proof of an
+	// empty composer (#5711). Only the screen decides, below. A blocked decision is
+	// already refused upstream; every other durable state cannot hold a draft.
+	switch rec.Activity.State {
+	case domain.ActivityIdle, domain.ActivityWaitingInput, domain.ActivityActive:
+	default:
 		return false
 	}
 	if m.agents == nil {
@@ -101,18 +107,63 @@ func (m *Manager) composerHoldsDraft(ctx context.Context, rec domain.SessionReco
 			m.logger.Warn("send: composer draft check skipped, screen capture failed; delivering", "sessionID", rec.ID, "error", err)
 			return false
 		}
-		observation := surfaceInspector.InspectTerminalSurface(output)
-		switch {
-		case observation.Work == ports.TerminalSurfaceWorkWaitingInput,
-			observation.Work == ports.TerminalSurfaceWorkBlocked:
-			// A provider-owned approval or input request, not a human draft; its
-			// rows can read as composer text. The drain treats it the same way.
-			return false
-		case observation.Composer != ports.TerminalComposerDraft:
-			return false // one empty or unknown frame is enough to deliver
+		if !composerFrameIsDraft(surfaceInspector.InspectTerminalSurface(output)) {
+			return false // one empty, unknown, or provider-owned frame delivers
 		}
 	}
 	return true
+}
+
+// composerFrameIsDraft reports whether a single captured frame positively shows
+// an unsent human draft. A provider-owned approval or input request is not a
+// human draft even when its rows read as composer text (the drain treats it the
+// same way), and an empty or unknown composer is not a draft.
+func composerFrameIsDraft(observation ports.TerminalSurfaceObservation) bool {
+	switch {
+	case observation.Work == ports.TerminalSurfaceWorkWaitingInput,
+		observation.Work == ports.TerminalSurfaceWorkBlocked:
+		return false
+	case observation.Composer != ports.TerminalComposerDraft:
+		return false
+	}
+	return true
+}
+
+// composerDraftOnFencedFrame captures the screen once and reports whether it
+// positively shows an unsent human draft. It runs under the held input fence,
+// immediately before the write, to confirm the composer is still empty after the
+// unfenced multi-sample probe — closing the race where a keystroke lands between
+// the probe's last frame and the paste (#5711). A frame it cannot read, or that
+// shows provider chrome or an empty composer, reports false (deliver).
+func (m *Manager) composerDraftOnFencedFrame(ctx context.Context, rec domain.SessionRecord) bool {
+	if m.agents == nil {
+		return false
+	}
+	agent, ok := m.agents.Agent(rec.Harness)
+	if !ok {
+		return false
+	}
+	surfaceInspector, ok := agent.(ports.TerminalSurfaceInspector)
+	if !ok {
+		return false
+	}
+	styledOutput, ok := m.runtime.(ports.StyledTerminalOutputReader)
+	if !ok {
+		return false
+	}
+	handle := runtimeHandle(rec.Metadata)
+	if handle.ID == "" {
+		return false
+	}
+	_, _, limit := m.composerProbeTiming()
+	probeCtx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
+	output, err := styledOutput.GetStyledOutput(probeCtx, handle, sendComposerProbeLines)
+	if err != nil {
+		m.logger.Warn("send: composer draft re-check failed under input fence; delivering", "sessionID", rec.ID, "error", err)
+		return false
+	}
+	return composerFrameIsDraft(surfaceInspector.InspectTerminalSurface(output))
 }
 
 // composerProbeGaveUp logs why the probe stopped early and delivers. A caller
@@ -140,12 +191,35 @@ func (m *Manager) composerProbeTiming() (poll, settle, limit time.Duration) {
 	return poll, settle, limit
 }
 
-// composerBusyCheck builds the guard callback for a send. It reads the last
-// accepted keystroke without closing terminal input: closing it would drop the
-// operator's keystrokes for the duration, and the guard's input lease already
-// fences AO writes around the check.
-func (m *Manager) composerBusyCheck() func(context.Context, domain.SessionRecord) bool {
-	return func(ctx context.Context, rec domain.SessionRecord) bool {
-		return m.composerHoldsDraft(ctx, rec, m.lastTerminalInputAt(rec))
+// composerBusyCheck builds the guard callback for a send. It returns whether the
+// composer holds a draft (so the send must be refused) and, when it does not, a
+// release the guard calls after the pane write.
+//
+// The multi-sample probe is read-only (lastTerminalInputAt, never a drain) so it
+// never drops the operator's keystrokes. But reading the last keystroke cannot
+// stop one arriving between the probe's final empty frame and the paste: the
+// guard's input lease is shared admission, not mutual exclusion against terminal
+// input. So once the probe proves empty, hold the terminal input fence (keystrokes
+// block, not dropped), confirm on one fenced frame that the composer is still
+// empty, and keep the fence held through the guard's write. A keystroke that
+// landed during the probe is caught by the fenced frame; one arriving after is
+// made to wait until the write completes, so neither concatenates with the payload
+// (#5711).
+func (m *Manager) composerBusyCheck() func(context.Context, domain.SessionRecord) (bool, func()) {
+	return func(ctx context.Context, rec domain.SessionRecord) (bool, func()) {
+		if m.composerHoldsDraft(ctx, rec, m.lastTerminalInputAt(rec)) {
+			return true, nil
+		}
+		release := m.fenceTerminalInput(rec)
+		if release == nil {
+			// Nothing to fence (non-TUI, no handle, or a gate without the fencer):
+			// deliver unsynchronized, exactly as before this mechanism existed.
+			return false, nil
+		}
+		if m.composerDraftOnFencedFrame(ctx, rec) {
+			release()
+			return true, nil
+		}
+		return false, release
 	}
 }

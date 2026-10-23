@@ -264,6 +264,39 @@ func TestBeginInputDrainBlocksMuxWritesUntilReleased(t *testing.T) {
 	eventually(t, time.Second, func() bool { return string(pty.writtenBytes()) == "allowed\n" })
 }
 
+func TestHoldInputBlocksMuxWritesButDoesNotDropThem(t *testing.T) {
+	// HoldInput fences AO's composer check + write against human keystrokes
+	// WITHOUT dropping them (unlike BeginInputDrain): a keystroke arriving while
+	// the fence is held must wait on inputMu and then be written once released,
+	// so it can neither interleave with the AO write nor be lost (#5711). Run
+	// under -race to prove the keystroke path and the fence share one mutex.
+	pty := newFakePTY()
+	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{pty}}}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+
+	conn := newFakeConn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go mgr.Serve(ctx, conn)
+
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgOpen}
+	recv(t, conn, chTerminal, msgOpened, time.Second)
+
+	release := mgr.HoldInput("t1")
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("queued\n"))}
+	// While the fence is held the keystroke's writeInput blocks on inputMu, so it
+	// has neither reached the pane nor been dropped.
+	time.Sleep(100 * time.Millisecond)
+	if got := string(pty.writtenBytes()); got != "" {
+		t.Fatalf("fenced keystroke reached the pane before release: %q", got)
+	}
+
+	release()
+	release() // idempotent.
+	// Released, not dropped: the keystroke is now written.
+	eventually(t, time.Second, func() bool { return string(pty.writtenBytes()) == "queued\n" })
+}
+
 func TestBeginInputDrainReturnsTheLastAcceptedWriteBarrier(t *testing.T) {
 	pty := newFakePTY()
 	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{pty}}}, nil, testLogger(), WithHeartbeat(0))

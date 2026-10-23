@@ -187,12 +187,25 @@ func TestComposerHoldsDraft(t *testing.T) {
 		}
 	})
 
+	t.Run("active turn with a draft is inspected and refused", func(t *testing.T) {
+		// An active turn can still have an editable composer holding a human
+		// follow-up draft (Claude/Codex report composer state independently of work
+		// state), so activity alone is not proof of an empty composer (#5711).
+		m, rt, _ := draftProbeManager(transitionSurfaceAgent{}, draftTerminalOutput)
+		if !m.composerHoldsDraft(ctx, draftProbeRecord(domain.ActivityActive), noInput) {
+			t.Fatal("an active turn with a proven draft must refuse, not deliver")
+		}
+		if rt.styledOutputCalls == 0 {
+			t.Fatal("active turn must be inspected on screen, not skipped")
+		}
+	})
+
 	failOpen := []struct {
 		name   string
 		mutate func(*Manager, *domain.SessionRecord)
 	}{
 		{"non-TUI session", func(_ *Manager, rec *domain.SessionRecord) { rec.Mode = domain.SessionModeChat }},
-		{"active turn", func(_ *Manager, rec *domain.SessionRecord) { rec.Activity.State = domain.ActivityActive }},
+		{"terminated turn", func(_ *Manager, rec *domain.SessionRecord) { rec.Activity.State = domain.ActivityExited }},
 		{"no agent registry", func(m *Manager, _ *domain.SessionRecord) { m.agents = nil }},
 		{"harness without a surface inspector", func(m *Manager, _ *domain.SessionRecord) { m.agents = singleAgent{agent: fakeAgent{}} }},
 		{"runtime without styled capture", func(m *Manager, _ *domain.SessionRecord) {
@@ -319,14 +332,81 @@ func TestSend_EnterOnlyResubmitSkipsTheComposerCheck(t *testing.T) {
 	}
 }
 
-func TestSend_InternalReportDeliverySkipsTheComposerCheck(t *testing.T) {
-	// Report deliveries are AO-internal and have no durable queue behind a 409.
+func TestSend_InternalReportDeliveryHonorsTheComposerCheck(t *testing.T) {
+	// A worker report must not append to and submit an operator's unsent draft.
+	// It is refused with ErrComposerBusy; report.Coordinator releases the batch
+	// (ReleaseReportBatch) and retries, so the report is not lost (#5711).
 	m, msg := composerSendTestManager(t, draftTerminalOutput)
 	report := domain.WrapReportDelivery("cm-1", "worker finished")
-	if err := m.Send(context.Background(), "s1", report, nil); err != nil {
-		t.Fatalf("Send: %v", err)
+	err := m.Send(context.Background(), "s1", report, nil)
+	if !errors.Is(err, ErrComposerBusy) {
+		t.Fatalf("Send error = %v, want ErrComposerBusy (a report must not land on a human draft)", err)
 	}
-	if len(msg.msgs) != 1 {
-		t.Fatalf("Send calls = %d, want the internal report delivered", len(msg.msgs))
+	if len(msg.msgs) != 0 {
+		t.Fatalf("Send calls = %d, want 0 (refused before the write)", len(msg.msgs))
+	}
+}
+
+// fencingInputGate is a terminal input gate that records HoldInput/release so a
+// test can assert the composer guard fences input across the final proof and the
+// write (#5711).
+type fencingInputGate struct {
+	held     int
+	released int
+}
+
+func (g *fencingInputGate) BeginInputDrain(string) (time.Time, func()) {
+	return time.Time{}, func() {}
+}
+func (g *fencingInputGate) LastInputAt(string) time.Time { return time.Time{} }
+func (g *fencingInputGate) HoldInput(string) func() {
+	g.held++
+	return func() { g.released++ }
+}
+
+func TestComposerBusyCheck_FencedRecheckCatchesDraftAfterProbe(t *testing.T) {
+	// The unfenced multi-sample probe reads an empty composer, but a keystroke
+	// lands before the write. Once the probe proves empty, the guard fences input
+	// and re-checks on one frame: the now-present draft must be caught and the
+	// send refused, closing the probe/write race a read of LastInputAt cannot.
+	// The probe short-circuits to "empty" on its first non-draft frame (one
+	// capture), then the fenced re-check captures the draft that has since appeared.
+	m, _, _ := draftProbeManager(transitionSurfaceAgent{}, idleTerminalOutput, draftTerminalOutput)
+	gate := &fencingInputGate{}
+	m.SetTerminalInputGate(gate)
+
+	busy, release := m.composerBusyCheck()(context.Background(), draftProbeRecord(domain.ActivityIdle))
+	if !busy {
+		t.Fatal("a draft appearing after the probe must be caught by the fenced re-check")
+	}
+	if release != nil {
+		t.Fatal("a refusal must not hand back a held fence")
+	}
+	if gate.held != 1 || gate.released != 1 {
+		t.Fatalf("fence held=%d released=%d, want 1/1 (acquired then released on refusal)", gate.held, gate.released)
+	}
+}
+
+func TestComposerBusyCheck_FenceHeldForDeliveryUntilRelease(t *testing.T) {
+	// Empty throughout: probe and fenced re-check both read empty, so the send is
+	// delivered and the fence is handed back to the guard STILL HELD — it is
+	// released only after the pane write, so a human keystroke cannot interleave.
+	m, _, _ := draftProbeManager(transitionSurfaceAgent{}, idleTerminalOutput)
+	gate := &fencingInputGate{}
+	m.SetTerminalInputGate(gate)
+
+	busy, release := m.composerBusyCheck()(context.Background(), draftProbeRecord(domain.ActivityIdle))
+	if busy {
+		t.Fatal("an empty composer must deliver")
+	}
+	if release == nil {
+		t.Fatal("delivery must hand back the held fence for the guard to release after the write")
+	}
+	if gate.held != 1 || gate.released != 0 {
+		t.Fatalf("fence held=%d released=%d, want held once and not yet released before the write", gate.held, gate.released)
+	}
+	release()
+	if gate.released != 1 {
+		t.Fatalf("release did not free the fence: released=%d", gate.released)
 	}
 }
