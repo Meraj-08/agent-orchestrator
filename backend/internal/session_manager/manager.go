@@ -5099,6 +5099,10 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 	if strings.TrimSpace(message) != "" {
 		composerBusy = m.composerBusyCheck()
 	}
+	// Keystrokes accepted after this instant were typed while or after this send
+	// wrote; confirmActive must not press Enter on them. Wall time, like the
+	// terminal gate's lastInputAt.
+	inputBaseline := time.Now()
 	outcome, err := m.messenger.DeliverWithComposerCheck(ctx, id, message, composerBusy, afterWrite)
 	if err != nil {
 		return fmt.Errorf("send %s: %w", id, err)
@@ -5149,7 +5153,7 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 		return nil
 	}
 	if m.harnessNudgeSafe(rec.Harness) {
-		if err := m.confirmActive(ctx, m.messenger, id, evidence); err != nil {
+		if err := m.confirmActive(ctx, m.messenger, id, evidence, inputBaseline); err != nil {
 			return fmt.Errorf("send %s: %w", id, err)
 		}
 	}
@@ -5280,8 +5284,21 @@ func (e deliveryEvidence) accepted(rec domain.SessionRecord) bool {
 	return false
 }
 
-func (m *Manager) confirmActive(ctx context.Context, guard *sessionguard.Guard, id domain.SessionID, evidence deliveryEvidence) error {
+// confirmActive nudges with an unfenced Enter-only send, after the send's write
+// fence released. Once the operator has typed into the pane since
+// inputBaseline, that Enter would submit their keystrokes along with (or
+// instead of) the prompt, so it stops and the delivery stays unconfirmed
+// unless this delivery's evidence proves it was accepted.
+func (m *Manager) confirmActive(ctx context.Context, guard *sessionguard.Guard, id domain.SessionID, evidence deliveryEvidence, inputBaseline time.Time) error {
 	return m.confirmActiveWithNudge(ctx, id, evidence, nil, func(nudgeCtx context.Context) (sessionguard.Outcome, error) {
+		if rec, ok, err := m.store.GetSession(nudgeCtx, id); err == nil && ok && m.lastTerminalInputAt(rec).After(inputBaseline) {
+			if evidence.accepted(rec) {
+				// The prompt was accepted; its turn is what keeps the session busy.
+				return sessionguard.SuppressedBusy, nil
+			}
+			m.logger.Info("send: operator typed since delivery; skipping Enter nudge", "sessionID", id)
+			return sessionguard.SuppressedComposerBusy, ErrDeliveryUnconfirmed
+		}
 		return guard.Deliver(nudgeCtx, id, "")
 	})
 }
