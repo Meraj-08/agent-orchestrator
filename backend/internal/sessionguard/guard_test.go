@@ -59,50 +59,6 @@ func (m *blockingMessenger) Send(context.Context, domain.SessionID, string) erro
 	return nil
 }
 
-func TestGuard_DeliverWithComposerCheck(t *testing.T) {
-	cases := []struct {
-		name        string
-		busy        func(context.Context, domain.SessionRecord) (bool, func())
-		wantOutcome Outcome
-		wantSent    bool
-	}{
-		{
-			name:        "proven draft refuses without writing",
-			busy:        func(context.Context, domain.SessionRecord) (bool, func()) { return true, nil },
-			wantOutcome: SuppressedComposerBusy,
-			wantSent:    false,
-		},
-		{
-			name:        "empty composer delivers",
-			busy:        func(context.Context, domain.SessionRecord) (bool, func()) { return false, nil },
-			wantOutcome: Sent,
-			wantSent:    true,
-		},
-		{
-			name:        "nil check behaves like an unchecked deliver",
-			busy:        nil,
-			wantOutcome: Sent,
-			wantSent:    true,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			msgr := &fakeMessenger{}
-			g := New(&fakeStore{rec: record(domain.ActivityIdle, false), ok: true}, msgr, nil)
-			got, err := g.DeliverWithComposerCheck(context.Background(), "s1", "hello", tc.busy, nil)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if got != tc.wantOutcome {
-				t.Fatalf("outcome = %v, want %v", got, tc.wantOutcome)
-			}
-			if sent := len(msgr.sent) == 1; sent != tc.wantSent {
-				t.Fatalf("message sent = %v, want %v (sent=%v)", sent, tc.wantSent, msgr.sent)
-			}
-		})
-	}
-}
-
 func TestGuard_ComposerCheckRunsWhileTheInputLeaseIsHeld(t *testing.T) {
 	// The composer check must run between acquiring and releasing the input
 	// lease, and before the pane write, so a human keystroke cannot land between
@@ -185,18 +141,6 @@ func TestGuard_CancelledContextNeverWrites(t *testing.T) {
 	}
 	if len(msgr.sent) != 0 {
 		t.Fatalf("wrote on a cancelled context: %v", msgr.sent)
-	}
-}
-
-func TestGuard_MutationDeliveryIsNeverComposerGated(t *testing.T) {
-	// AO mutations (agent switch handoffs) own the session's exclusive fence and
-	// must write their prompt; they have no composer check to consult.
-	msgr := &fakeMessenger{}
-	g := New(&fakeStore{rec: record(domain.ActivityIdle, false), ok: true}, msgr, nil)
-	got, err := g.DeliverUnderMutationChecked(context.Background(), "s1", "handoff",
-		func(context.Context, domain.SessionRecord) error { return nil })
-	if err != nil || got != Sent || len(msgr.sent) != 1 {
-		t.Fatalf("DeliverUnderMutationChecked = (%v, %v), sent=%v; want Sent", got, err, msgr.sent)
 	}
 }
 

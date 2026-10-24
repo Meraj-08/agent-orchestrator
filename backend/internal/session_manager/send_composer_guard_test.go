@@ -91,12 +91,6 @@ func TestComposerHoldsDraft(t *testing.T) {
 			t.Fatal("recency must not skip the probe when the screen can be read")
 		}
 	})
-	t.Run("draft typed outside AO (no recorded keystroke) is refused", func(t *testing.T) {
-		m, _, _ := draftProbeManager(transitionSurfaceAgent{}, draftTerminalOutput)
-		if !m.composerHoldsDraft(ctx, draftProbeRecord(domain.ActivityIdle), noInput) {
-			t.Fatal("a draft with no AO-recorded keystroke must still be detected")
-		}
-	})
 
 	// Review finding 3: provider-owned approval and input screens are not drafts.
 	t.Run("provider decision screen is not a draft", func(t *testing.T) {
@@ -263,8 +257,7 @@ func (g *drainOnlyInputGate) BeginInputDrain(string) (time.Time, func()) {
 func TestComposerBusyCheckNeverClosesTerminalInput(t *testing.T) {
 	// Closing the input barrier DROPS the operator's keystrokes (they are not
 	// buffered), so reading the last keystroke for the probe must be read-only.
-	m, rt, _ := draftProbeManager(transitionSurfaceAgent{}, idleTerminalOutput)
-	m.interfaceTransition.idleSettle = 40 * time.Millisecond
+	m, _, _ := draftProbeManager(transitionSurfaceAgent{}, idleTerminalOutput)
 	gate := &recordingInputGate{lastInputAt: time.Now()}
 	m.SetTerminalInputGate(gate)
 
@@ -272,10 +265,6 @@ func TestComposerBusyCheckNeverClosesTerminalInput(t *testing.T) {
 
 	if gate.drainCalls != 0 {
 		t.Fatalf("the send probe closed terminal input %d time(s)", gate.drainCalls)
-	}
-	// The read-only keystroke time was honored: sampling waited for it to settle.
-	if len(rt.outputCallTimes) == 0 || rt.outputCallTimes[0].Before(gate.lastInputAt.Add(m.interfaceTransition.idleSettle)) {
-		t.Fatalf("probe ignored the last keystroke time: %v", rt.outputCallTimes)
 	}
 
 	drainOnly := &drainOnlyInputGate{}

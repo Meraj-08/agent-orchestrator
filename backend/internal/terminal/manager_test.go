@@ -265,40 +265,6 @@ func TestBeginInputDrainBlocksMuxWritesUntilReleased(t *testing.T) {
 	eventually(t, time.Second, func() bool { return string(pty.writtenBytes()) == "allowed\n" })
 }
 
-func TestHoldInputBlocksMuxWritesButDoesNotDropThem(t *testing.T) {
-	// HoldInput fences AO's composer check + write against human keystrokes
-	// WITHOUT dropping them (unlike BeginInputDrain): a keystroke arriving while
-	// the fence is held must wait on the terminal's fence and then be written once
-	// released, so it can neither interleave with the AO write nor be lost
-	// (#5711). Run under -race to prove the keystroke path and the fence share
-	// one lock.
-	pty := newFakePTY()
-	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{pty}}}, nil, testLogger(), WithHeartbeat(0))
-	defer mgr.Close()
-
-	conn := newFakeConn()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go mgr.Serve(ctx, conn)
-
-	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgOpen}
-	recv(t, conn, chTerminal, msgOpened, time.Second)
-
-	_, release := mgr.HoldInput("t1")
-	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("queued\n"))}
-	// While the fence is held the keystroke waits on it, so it has neither
-	// reached the pane nor been dropped.
-	time.Sleep(100 * time.Millisecond)
-	if got := string(pty.writtenBytes()); got != "" {
-		t.Fatalf("fenced keystroke reached the pane before release: %q", got)
-	}
-
-	release()
-	release() // idempotent.
-	// Released, not dropped: the keystroke is now written.
-	eventually(t, time.Second, func() bool { return string(pty.writtenBytes()) == "queued\n" })
-}
-
 func TestHoldInputFencesInputBufferedDuringAttach(t *testing.T) {
 	// A keystroke typed while the attach is still in flight is buffered and
 	// replayed by setPTY. That replay is a pane write like any other: it must
@@ -343,9 +309,11 @@ func TestHoldInputFencesInputBufferedDuringAttach(t *testing.T) {
 }
 
 func TestHeldFenceDoesNotStallTheConnectionsOtherTerminals(t *testing.T) {
-	// The desktop app multiplexes every terminal over one connection. A keystroke
-	// for t1 waiting on t1's held fence must not stall the connection's read loop:
-	// typing in t2, and pings, keep flowing; t1's keys land in order on release.
+	// HoldInput fences AO's composer check and write against human keystrokes
+	// without dropping them (unlike BeginInputDrain): t1's keys wait on its fence
+	// and land in order on release (#5711). The desktop app multiplexes every
+	// terminal over one connection, so the wait must not stall the connection's
+	// read loop: typing in t2, and pings, keep flowing.
 	p1, p2 := newFakePTY(), newFakePTY()
 	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{p1, p2}}}, nil, testLogger(), WithHeartbeat(0))
 	defer mgr.Close()
@@ -372,6 +340,7 @@ func TestHeldFenceDoesNotStallTheConnectionsOtherTerminals(t *testing.T) {
 		t.Fatalf("t1's keystrokes passed its held fence: %q", got)
 	}
 	release()
+	release() // idempotent
 	eventually(t, time.Second, func() bool { return string(p1.writtenBytes()) == "held" })
 }
 
