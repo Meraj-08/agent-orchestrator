@@ -5091,10 +5091,10 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 	}
 	// A non-empty send must not land in a composer that holds an unsent human
 	// draft (#5711), whether it is an ao send or a worker report: a refused report
-	// is released and retried by report.Coordinator (ReleaseReportBatch), so draft
-	// protection does not lose it. Only an empty message is left unchecked — it is
-	// the deliberate Enter that submits an existing draft. The check runs under the
-	// guard's held input lease, immediately before the write.
+	// is deferred and retried by report.Coordinator (ErrOrchestratorBusy), so
+	// draft protection does not lose it. Only an empty message is left unchecked —
+	// it is the deliberate Enter that submits an existing draft. The check runs
+	// under the guard's held input lease, immediately before the write.
 	var composerBusy func(context.Context, domain.SessionRecord) (bool, func())
 	if strings.TrimSpace(message) != "" {
 		composerBusy = m.composerBusyCheck()

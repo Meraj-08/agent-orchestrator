@@ -335,8 +335,8 @@ func TestSend_EnterOnlyResubmitSkipsTheComposerCheck(t *testing.T) {
 
 func TestSend_InternalReportDeliveryHonorsTheComposerCheck(t *testing.T) {
 	// A worker report must not append to and submit an operator's unsent draft.
-	// It is refused with ErrComposerBusy; report.Coordinator releases the batch
-	// (ReleaseReportBatch) and retries, so the report is not lost (#5711).
+	// It is refused with ErrComposerBusy; report.Coordinator defers the batch
+	// (ErrOrchestratorBusy) and retries, so the report is not lost (#5711).
 	m, msg := composerSendTestManager(t, draftTerminalOutput)
 	report := domain.WrapReportDelivery("cm-1", "worker finished")
 	err := m.Send(context.Background(), "s1", report, nil)

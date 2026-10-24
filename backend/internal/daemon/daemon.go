@@ -1300,7 +1300,11 @@ func (d reportSemanticDelivery) Submit(ctx context.Context, id domain.SessionID,
 	if d.sessions == nil {
 		return reportsvc.ErrReportDeliveryModeUnsupported
 	}
-	return d.sessions.SendSemantic(ctx, id, message, idempotencyKey)
+	err := d.sessions.SendSemantic(ctx, id, message, idempotencyKey)
+	if errors.Is(err, sessionmanager.ErrComposerBusy) {
+		return fmt.Errorf("%w: %w", reportsvc.ErrOrchestratorBusy, err)
+	}
+	return err
 }
 
 func (d reportSemanticDelivery) Interrupt(ctx context.Context, id domain.SessionID) error {
