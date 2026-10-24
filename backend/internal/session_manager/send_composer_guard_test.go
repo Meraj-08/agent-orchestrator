@@ -467,28 +467,6 @@ type nudgeSafeSurfaceAgent struct{ transitionSurfaceAgent }
 func (nudgeSafeSurfaceAgent) EmitsSubmitActivity() bool  { return true }
 func (nudgeSafeSurfaceAgent) EmitsBlockedActivity() bool { return true }
 
-// typingInputGate reports keystrokes a test types while a send is in flight.
-type typingInputGate struct {
-	mu          sync.Mutex
-	lastInputAt time.Time
-}
-
-func (g *typingInputGate) BeginInputDrain(string) (time.Time, func()) {
-	return g.LastInputAt(""), func() {}
-}
-
-func (g *typingInputGate) LastInputAt(string) time.Time {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return g.lastInputAt
-}
-
-func (g *typingInputGate) typeKey() {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.lastInputAt = time.Now()
-}
-
 func TestSend_NoEnterNudgeAfterTheOperatorTypes(t *testing.T) {
 	// The prompt's Enter was swallowed (the session never goes active) and the
 	// operator typed once the write fence released. A confirmation Enter would
@@ -496,11 +474,11 @@ func TestSend_NoEnterNudgeAfterTheOperatorTypes(t *testing.T) {
 	// the send stops nudging and reports the delivery as unconfirmed.
 	m, msg := composerSendTestManager(t, idleTerminalOutput)
 	m.agents = singleAgent{agent: nudgeSafeSurfaceAgent{}}
-	gate := &typingInputGate{}
+	gate := &recordingInputGate{}
 	m.SetTerminalInputGate(gate)
 	msg.onSend = func(_ domain.SessionID, message string) {
 		if message != "" {
-			gate.typeKey()
+			gate.lastInputAt = time.Now() // a keystroke right after AO's write
 		}
 	}
 
@@ -516,7 +494,7 @@ func TestSend_NoEnterNudgeAfterTheOperatorTypes(t *testing.T) {
 func TestSend_EnterNudgeStillRunsWhenNobodyTyped(t *testing.T) {
 	m, msg := composerSendTestManager(t, idleTerminalOutput)
 	m.agents = singleAgent{agent: nudgeSafeSurfaceAgent{}}
-	m.SetTerminalInputGate(&typingInputGate{})
+	m.SetTerminalInputGate(&recordingInputGate{})
 
 	err := m.Send(context.Background(), "s1", "run the tests", nil)
 	if !errors.Is(err, ErrDeliveryUnconfirmed) {

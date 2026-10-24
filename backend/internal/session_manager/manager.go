@@ -639,38 +639,36 @@ func (m *Manager) SetPersistentHostReconcileDone(done <-chan struct{}) {
 }
 
 func (m *Manager) beginTerminalInputDrain(rec domain.SessionRecord) (lastInputAt time.Time, release func()) {
-	if domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeTUI {
-		return time.Time{}, nil
-	}
-	handle := runtimeHandle(rec.Metadata)
-	if handle.ID == "" {
-		return time.Time{}, nil
-	}
-	m.terminalInputGateMu.Lock()
-	gate := m.terminalInputGate
-	m.terminalInputGateMu.Unlock()
+	gate, terminalID := m.terminalInputGateFor(rec)
 	if gate == nil {
 		return time.Time{}, nil
 	}
-	return gate.BeginInputDrain(handle.ID)
+	return gate.BeginInputDrain(terminalID)
+}
+
+// terminalInputGateFor returns the input gate and terminal id for a TUI
+// session's terminal; gate is nil when the session has none.
+func (m *Manager) terminalInputGateFor(rec domain.SessionRecord) (gate TerminalInputGate, terminalID string) {
+	handle := runtimeHandle(rec.Metadata)
+	if domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeTUI || handle.ID == "" {
+		return nil, ""
+	}
+	m.terminalInputGateMu.Lock()
+	gate = m.terminalInputGate
+	m.terminalInputGateMu.Unlock()
+	return gate, handle.ID
 }
 
 // lastTerminalInputAt reports the newest keystroke AO accepted for a TUI
 // session's terminal, read-only. It is zero when nothing was typed through AO
 // or the gate cannot be read without closing input.
 func (m *Manager) lastTerminalInputAt(rec domain.SessionRecord) time.Time {
-	handle := runtimeHandle(rec.Metadata)
-	if domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeTUI || handle.ID == "" {
-		return time.Time{}
-	}
-	m.terminalInputGateMu.Lock()
-	gate := m.terminalInputGate
-	m.terminalInputGateMu.Unlock()
+	gate, terminalID := m.terminalInputGateFor(rec)
 	observer, ok := gate.(TerminalInputObserver)
 	if !ok {
 		return time.Time{}
 	}
-	return observer.LastInputAt(handle.ID)
+	return observer.LastInputAt(terminalID)
 }
 
 // fenceTerminalInput holds a TUI session's terminal write fence so a human
@@ -680,18 +678,12 @@ func (m *Manager) lastTerminalInputAt(rec domain.SessionRecord) time.Time {
 // nothing to fence (non-TUI, no handle, no gate, or a gate without the fencer
 // capability), in which case the caller proceeds unsynchronized exactly as before.
 func (m *Manager) fenceTerminalInput(rec domain.SessionRecord) (lastInputAt time.Time, release func()) {
-	handle := runtimeHandle(rec.Metadata)
-	if domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeTUI || handle.ID == "" {
-		return time.Time{}, nil
-	}
-	m.terminalInputGateMu.Lock()
-	gate := m.terminalInputGate
-	m.terminalInputGateMu.Unlock()
+	gate, terminalID := m.terminalInputGateFor(rec)
 	fencer, ok := gate.(TerminalInputFencer)
 	if !ok {
 		return time.Time{}, nil
 	}
-	return fencer.HoldInput(handle.ID)
+	return fencer.HoldInput(terminalID)
 }
 
 // beginShellTerminalTeardown starts the shell-terminal gate for id ahead of
@@ -5032,12 +5024,7 @@ func (m *Manager) send(ctx context.Context, id domain.SessionID, message, client
 		return err
 	}
 
-	// Classify the ORIGINAL message before the session-delivery wrapping below.
-	// The composer-draft gate (#5711) must still treat an ordinary user/relay
-	// send as checkable, even though wrapping makes it read as a coordination
-	// delivery to CoordinationDeliveryID afterward.
-	_, coordinationDelivery := domain.CoordinationDeliveryID(message)
-	if !coordinationDelivery && !options.AuthoredByUser && strings.TrimSpace(message) != "" {
+	if _, coordination := domain.CoordinationDeliveryID(message); !coordination && !options.AuthoredByUser && strings.TrimSpace(message) != "" {
 		deliveryID := clientMessageID
 		if deliveryID == "" {
 			deliveryID = "session-send:" + m.newLaunchID()
