@@ -370,6 +370,103 @@ func TestHoldInputLeavesOtherTerminalsTyping(t *testing.T) {
 	eventually(t, time.Second, func() bool { return string(p1.writtenBytes()) == "held" })
 }
 
+func TestHeldFenceDoesNotStallTheConnectionsOtherTerminals(t *testing.T) {
+	// The desktop app multiplexes every terminal over one connection. A keystroke
+	// for t1 waiting on t1's held fence must not stall the connection's read loop:
+	// typing in t2, and pings, keep flowing; t1's keys land in order on release.
+	p1, p2 := newFakePTY(), newFakePTY()
+	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{p1, p2}}}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+
+	conn := newFakeConn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go mgr.Serve(ctx, conn)
+
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgOpen}
+	recv(t, conn, chTerminal, msgOpened, time.Second)
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t2", Type: msgOpen}
+	recv(t, conn, chTerminal, msgOpened, time.Second)
+
+	_, release := mgr.HoldInput("t1")
+	defer release()
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("he"))}
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("ld"))}
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t2", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("typed"))}
+	eventually(t, time.Second, func() bool { return string(p2.writtenBytes()) == "typed" })
+	conn.in <- clientMsg{Ch: chSystem, Type: msgPing}
+	recv(t, conn, chSystem, msgPong, time.Second)
+	if got := string(p1.writtenBytes()); got != "" {
+		t.Fatalf("t1's keystrokes passed its held fence: %q", got)
+	}
+	release()
+	eventually(t, time.Second, func() bool { return string(p1.writtenBytes()) == "held" })
+}
+
+func TestClosingATerminalStillWritesKeysQueuedBehindItsFence(t *testing.T) {
+	// The client may switch away (close) right after typing. Keys it sent first
+	// still reach the pane once the fence releases, as they did when writes were
+	// synchronous.
+	pty := newFakePTY()
+	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{pty}}}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+
+	conn := newFakeConn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go mgr.Serve(ctx, conn)
+
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgOpen}
+	recv(t, conn, chTerminal, msgOpened, time.Second)
+
+	_, release := mgr.HoldInput("t1")
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("ls\r"))}
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgClose}
+	conn.in <- clientMsg{Ch: chSystem, Type: msgPing}
+	recv(t, conn, chSystem, msgPong, time.Second)
+	release()
+	eventually(t, time.Second, func() bool { return string(pty.writtenBytes()) == "ls\r" })
+}
+
+func TestKeystrokeReceivedDuringADrainIsDroppedEvenIfWrittenLater(t *testing.T) {
+	// A drain refuses input received while it is held. A keystroke that also
+	// waits on a held fence must not slip through once the drain has ended.
+	pty := newFakePTY()
+	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{pty}}}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+
+	conn := newFakeConn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go mgr.Serve(ctx, conn)
+
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgOpen}
+	recv(t, conn, chTerminal, msgOpened, time.Second)
+
+	_, releaseHold := mgr.HoldInput("t1")
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("queued\n"))}
+	conn.in <- clientMsg{Ch: chSystem, Type: msgPing}
+	recv(t, conn, chSystem, msgPong, time.Second)
+	drained := make(chan func())
+	go func() {
+		_, release := mgr.BeginInputDrain("t1")
+		drained <- release
+	}()
+	// The drain waits on the held fence; the next keystroke arrives meanwhile.
+	time.Sleep(20 * time.Millisecond)
+	releaseHold()
+	releaseDrain := <-drained
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("during\n"))}
+	conn.in <- clientMsg{Ch: chSystem, Type: msgPing}
+	recv(t, conn, chSystem, msgPong, time.Second)
+	releaseDrain()
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("after\n"))}
+	eventually(t, time.Second, func() bool { return strings.HasSuffix(string(pty.writtenBytes()), "after\n") })
+	if got := string(pty.writtenBytes()); strings.Contains(got, "during") {
+		t.Fatalf("a keystroke received during the drain reached the pane: %q", got)
+	}
+}
+
 func TestBeginInputDrainReturnsTheLastAcceptedWriteBarrier(t *testing.T) {
 	pty := newFakePTY()
 	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{pty}}}, nil, testLogger(), WithHeartbeat(0))

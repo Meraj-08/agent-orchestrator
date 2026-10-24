@@ -259,6 +259,13 @@ func (m *Manager) TerminalOnScreen(terminalID string) bool {
 	return cols > 0 && rows > 0
 }
 
+// inputRefused reports whether a drain refuses input for terminalID right now.
+func (m *Manager) inputRefused(terminalID string) bool {
+	m.inputMu.Lock()
+	defer m.inputMu.Unlock()
+	return m.inputBlocked[terminalID] > 0
+}
+
 func (m *Manager) writeInput(terminalID string, a *attachment, raw []byte, release func()) {
 	typed := !terminalReports.Match(raw)
 	unlock := m.lockInputFence(terminalID)
@@ -445,12 +452,13 @@ func (m *Manager) Serve(ctx context.Context, conn wsConn) {
 	defer cancel()
 
 	c := &connState{
-		mgr:    m,
-		conn:   conn,
-		ctx:    ctx,
-		cancel: cancel,
-		out:    newOutQueue(),
-		terms:  map[string]*attachment{},
+		mgr:     m,
+		conn:    conn,
+		ctx:     ctx,
+		cancel:  cancel,
+		out:     newOutQueue(),
+		terms:   map[string]*attachment{},
+		writers: map[string]*inputWriter{},
 	}
 	defer c.cleanup()
 
@@ -481,6 +489,64 @@ type connState struct {
 	terms     map[string]*attachment // terminal id -> this conn's own attach PTY
 	unsubEvts func()
 	closed    bool
+
+	// writers is only touched by the read loop and, once it has returned, by
+	// cleanup, so it needs no lock.
+	writers map[string]*inputWriter
+}
+
+// inputQueueDepth bounds the keystroke messages one terminal can queue behind
+// its held fence before the connection's read loop waits for room.
+const inputQueueDepth = 256
+
+// inputWriter writes one terminal's input from one connection in arrival order,
+// off the connection's read loop. A keystroke waiting on a held fence
+// (HoldInput) then stalls only that terminal, not the connection's other
+// terminals, resizes, or pongs — the desktop app multiplexes every terminal
+// over one connection.
+type inputWriter struct {
+	queue chan queuedInput
+}
+
+// queuedInput is a keystroke message to write, or (closeAfter) the attachment
+// to close once every keystroke queued before it is written.
+type queuedInput struct {
+	a          *attachment
+	raw        []byte
+	release    func()
+	closeAfter bool
+}
+
+func (w *inputWriter) run(m *Manager, terminalID string) {
+	for in := range w.queue {
+		if in.closeAfter {
+			in.a.close()
+			continue
+		}
+		m.writeInput(terminalID, in.a, in.raw, in.release)
+	}
+}
+
+// queueInput hands a keystroke message to the terminal's writer, starting it on
+// first use.
+func (c *connState) queueInput(terminalID string, in queuedInput) {
+	w := c.writers[terminalID]
+	if w == nil {
+		w = &inputWriter{queue: make(chan queuedInput, inputQueueDepth)}
+		c.writers[terminalID] = w
+		go w.run(c.mgr, terminalID)
+	}
+	w.queue <- in
+}
+
+// closeAfterInput closes a once the keystrokes this connection queued for it
+// are written, so a client that types and then switches away keeps its keys.
+func (c *connState) closeAfterInput(terminalID string, a *attachment) {
+	if c.writers[terminalID] == nil {
+		a.close()
+		return
+	}
+	c.queueInput(terminalID, queuedInput{a: a, closeAfter: true})
 }
 
 func (c *connState) handle(msg clientMsg) {
@@ -510,11 +576,14 @@ func (c *connState) handleTerminal(msg clientMsg) {
 			c.enqueue(serverMsg{Ch: chTerminal, ID: msg.ID, Type: msgError, Error: "session input is disabled while an exclusive session operation is in progress"})
 			return
 		}
-		if a := c.lookup(msg.ID); a != nil {
-			c.mgr.writeInput(msg.ID, a, raw, release)
-		} else {
+		// A drain refuses input received while it is held, even if the write
+		// itself would only run after the drain ends.
+		a := c.lookup(msg.ID)
+		if a == nil || c.mgr.inputRefused(msg.ID) {
 			release()
+			return
 		}
+		c.queueInput(msg.ID, queuedInput{a: a, raw: raw, release: release})
 	case msgResize:
 		// The client reports the grid it fits to; the manager arbitrates the shared
 		// PTY's size across all viewers and resizes the attach Stream itself (see
@@ -593,7 +662,7 @@ func (c *connState) closeTerminal(id string) {
 	c.mu.Unlock()
 	c.mgr.leaveTerminal(id, c)
 	if a != nil {
-		a.close()
+		c.closeAfterInput(id, a)
 	}
 }
 
@@ -813,8 +882,13 @@ func (c *connState) cleanup() {
 	for _, id := range ids {
 		c.mgr.leaveTerminal(id, c)
 	}
-	for _, a := range attachments {
-		a.close()
+	for i, a := range attachments {
+		c.closeAfterInput(ids[i], a)
+	}
+	// The read loop has returned, so nothing queues input any more. Each
+	// writer finishes what was queued (keystrokes, then closes) and exits.
+	for _, w := range c.writers {
+		close(w.queue)
 	}
 	if unsubEvts != nil {
 		unsubEvts()
