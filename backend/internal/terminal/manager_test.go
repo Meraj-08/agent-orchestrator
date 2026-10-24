@@ -3,6 +3,7 @@ package terminal
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -426,6 +427,74 @@ func TestClosingATerminalStillWritesKeysQueuedBehindItsFence(t *testing.T) {
 	recv(t, conn, chSystem, msgPong, time.Second)
 	release()
 	eventually(t, time.Second, func() bool { return string(pty.writtenBytes()) == "ls\r" })
+}
+
+func TestClosedTerminalsDoNotKeepInputWriters(t *testing.T) {
+	// One long-lived desktop connection opens and closes many terminals. Each
+	// terminal's writer must be retired once it is closed and drained, not kept
+	// until the connection ends.
+	const terminals = 20
+	ptys := make([]*fakePTY, terminals)
+	for i := range ptys {
+		ptys[i] = newFakePTY()
+	}
+	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: ptys}}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// Drive the connection's read-loop handlers directly so the test can see
+	// its writers.
+	c := &connState{mgr: mgr, conn: newFakeConn(), ctx: ctx, cancel: cancel, out: newOutQueue(), terms: map[string]*attachment{}, writers: map[string]*inputWriter{}}
+	defer c.cleanup()
+
+	for i := range terminals {
+		id := fmt.Sprintf("t%d", i)
+		c.handle(clientMsg{Ch: chTerminal, ID: id, Type: msgOpen})
+		c.handle(clientMsg{Ch: chTerminal, ID: id, Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("x"))})
+		eventually(t, time.Second, func() bool { return string(ptys[i].writtenBytes()) == "x" })
+		c.handle(clientMsg{Ch: chTerminal, ID: id, Type: msgClose})
+	}
+	eventually(t, time.Second, func() bool {
+		c.closeTerminal("none") // any close sweeps writers that finished draining
+		return len(c.writers) == 0
+	})
+}
+
+func TestReopenedTerminalsWriterWaitsForTheRetiredOne(t *testing.T) {
+	// After a close and reopen, keys the retired writer still holds (behind a
+	// fence or a slow write) must reach the pane before keys typed after the
+	// reopen, so the new writer starts only once the old one has drained.
+	pty := newFakePTY()
+	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{pty}}}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+	conn := newFakeConn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go mgr.Serve(ctx, conn)
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgOpen}
+	recv(t, conn, chTerminal, msgOpened, time.Second)
+	var a *attachment
+	eventually(t, time.Second, func() bool {
+		mgr.mu.Lock()
+		defer mgr.mu.Unlock()
+		for att := range mgr.attachments {
+			a = att
+		}
+		return a != nil
+	})
+
+	retired := &inputWriter{queue: make(chan queuedInput), done: make(chan struct{}), retired: true}
+	next := &inputWriter{queue: make(chan queuedInput, 1), done: make(chan struct{})}
+	go next.run(mgr, "t1", retired)
+	next.queue <- queuedInput{a: a, raw: []byte("after"), release: func() {}}
+	time.Sleep(50 * time.Millisecond)
+	if got := string(pty.writtenBytes()); got != "" {
+		t.Fatalf("new writer wrote %q while the retired one was still draining", got)
+	}
+	close(retired.done)
+	eventually(t, time.Second, func() bool { return string(pty.writtenBytes()) == "after" })
+	close(next.queue)
+	<-next.done
 }
 
 func TestKeystrokeReceivedDuringADrainIsDroppedEvenIfWrittenLater(t *testing.T) {

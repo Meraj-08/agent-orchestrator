@@ -490,8 +490,8 @@ type connState struct {
 	unsubEvts func()
 	closed    bool
 
-	// writers is only touched by the read loop and, once it has returned, by
-	// cleanup, so it needs no lock.
+	// writers holds each terminal's newest writer. It is only touched by the
+	// read loop and, once it has returned, by cleanup, so it needs no lock.
 	writers map[string]*inputWriter
 }
 
@@ -503,9 +503,13 @@ const inputQueueDepth = 256
 // off the connection's read loop. A keystroke waiting on a held fence
 // (HoldInput) then stalls only that terminal, not the connection's other
 // terminals, resizes, or pongs — the desktop app multiplexes every terminal
-// over one connection.
+// over one connection. Closing the terminal retires its writer; it exits once
+// its queue drains.
 type inputWriter struct {
 	queue chan queuedInput
+	done  chan struct{}
+	// retired means queue is closed. Read loop only.
+	retired bool
 }
 
 // queuedInput is a keystroke message to write, or (closeAfter) the attachment
@@ -517,7 +521,14 @@ type queuedInput struct {
 	closeAfter bool
 }
 
-func (w *inputWriter) run(m *Manager, terminalID string) {
+// run writes the queue in order. prev is the terminal's retired writer, if it
+// may still be draining; waiting for it keeps keys typed before a close and
+// reopen ahead of keys typed after.
+func (w *inputWriter) run(m *Manager, terminalID string, prev *inputWriter) {
+	defer close(w.done)
+	if prev != nil {
+		<-prev.done
+	}
 	for in := range w.queue {
 		if in.closeAfter {
 			in.a.close()
@@ -527,14 +538,15 @@ func (w *inputWriter) run(m *Manager, terminalID string) {
 	}
 }
 
-// queueInput hands a keystroke message to the terminal's writer, starting it on
-// first use.
+// queueInput hands a keystroke message to the terminal's writer, starting one
+// when it has none or its last one was retired.
 func (c *connState) queueInput(terminalID string, in queuedInput) {
 	w := c.writers[terminalID]
-	if w == nil {
-		w = &inputWriter{queue: make(chan queuedInput, inputQueueDepth)}
-		c.writers[terminalID] = w
-		go w.run(c.mgr, terminalID)
+	if w == nil || w.retired {
+		next := &inputWriter{queue: make(chan queuedInput, inputQueueDepth), done: make(chan struct{})}
+		go next.run(c.mgr, terminalID, w)
+		c.writers[terminalID] = next
+		w = next
 	}
 	w.queue <- in
 }
@@ -542,11 +554,30 @@ func (c *connState) queueInput(terminalID string, in queuedInput) {
 // closeAfterInput closes a once the keystrokes this connection queued for it
 // are written, so a client that types and then switches away keeps its keys.
 func (c *connState) closeAfterInput(terminalID string, a *attachment) {
-	if c.writers[terminalID] == nil {
+	if w := c.writers[terminalID]; w == nil || w.retired {
 		a.close()
 		return
 	}
 	c.queueInput(terminalID, queuedInput{a: a, closeAfter: true})
+}
+
+// retireWriter closes terminalID's writer queue, so the writer exits once it
+// has written what was queued, and forgets writers that already finished.
+func (c *connState) retireWriter(terminalID string) {
+	if w := c.writers[terminalID]; w != nil && !w.retired {
+		close(w.queue)
+		w.retired = true
+	}
+	for id, w := range c.writers {
+		if !w.retired {
+			continue
+		}
+		select {
+		case <-w.done:
+			delete(c.writers, id)
+		default:
+		}
+	}
 }
 
 func (c *connState) handle(msg clientMsg) {
@@ -664,6 +695,7 @@ func (c *connState) closeTerminal(id string) {
 	if a != nil {
 		c.closeAfterInput(id, a)
 	}
+	c.retireWriter(id)
 }
 
 func (c *connState) lookup(id string) *attachment {
@@ -888,7 +920,9 @@ func (c *connState) cleanup() {
 	// The read loop has returned, so nothing queues input any more. Each
 	// writer finishes what was queued (keystrokes, then closes) and exits.
 	for _, w := range c.writers {
-		close(w.queue)
+		if !w.retired {
+			close(w.queue)
+		}
 	}
 	if unsubEvts != nil {
 		unsubEvts()
