@@ -5271,22 +5271,28 @@ func (e deliveryEvidence) accepted(rec domain.SessionRecord) bool {
 	return false
 }
 
-// confirmActive nudges with an unfenced Enter-only send, after the send's write
-// fence released. Once the operator has typed into the pane since
-// inputBaseline, that Enter would submit their keystrokes along with (or
-// instead of) the prompt, so it stops and the delivery stays unconfirmed
-// unless this delivery's evidence proves it was accepted.
+// confirmActive fences each retry's input timestamp check through its Enter
+// write. Typing since inputBaseline suppresses the retry, so AO cannot submit
+// the operator's new draft while trying to confirm its own prompt.
 func (m *Manager) confirmActive(ctx context.Context, guard *sessionguard.Guard, id domain.SessionID, evidence deliveryEvidence, inputBaseline time.Time) error {
 	return m.confirmActiveWithNudge(ctx, id, evidence, nil, func(nudgeCtx context.Context) (sessionguard.Outcome, error) {
-		if rec, ok, err := m.store.GetSession(nudgeCtx, id); err == nil && ok && m.lastTerminalInputAt(rec).After(inputBaseline) {
-			if evidence.accepted(rec) {
-				// The prompt was accepted; its turn is what keeps the session busy.
+		accepted := false
+		outcome, err := guard.DeliverWithComposerCheck(nudgeCtx, id, "", func(_ context.Context, rec domain.SessionRecord) (bool, func()) {
+			lastInputAt, release := m.fenceTerminalInput(rec)
+			if release == nil {
+				lastInputAt = m.lastTerminalInputAt(rec)
+			}
+			accepted = evidence.accepted(rec)
+			return lastInputAt.After(inputBaseline), release
+		}, nil)
+		if err == nil && outcome == sessionguard.SuppressedComposerBusy {
+			if accepted {
 				return sessionguard.SuppressedBusy, nil
 			}
 			m.logger.Info("send: operator typed since delivery; skipping Enter nudge", "sessionID", id)
 			return sessionguard.SuppressedComposerBusy, ErrDeliveryUnconfirmed
 		}
-		return guard.Deliver(nudgeCtx, id, "")
+		return outcome, err
 	})
 }
 

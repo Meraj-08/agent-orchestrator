@@ -267,20 +267,28 @@ func (m *Manager) inputRefused(terminalID string) bool {
 }
 
 func (m *Manager) writeInput(terminalID string, a *attachment, raw []byte, release func()) {
-	typed := !terminalReports.Match(raw)
 	unlock := m.lockInputFence(terminalID)
 	defer unlock()
 	m.inputMu.Lock()
 	blocked := m.inputBlocked[terminalID] > 0
-	if !blocked && typed {
-		m.lastInputAt[terminalID] = time.Now()
-	}
 	m.inputMu.Unlock()
 	if blocked {
 		release()
 		return
 	}
 	_ = a.writeLeased(raw, release)
+	m.recordInputAt(terminalID, raw)
+}
+
+// recordInputAt starts the render settle window after input acceptance and
+// refreshes it after buffered replay. Callers hold the terminal's write fence.
+func (m *Manager) recordInputAt(terminalID string, raw []byte) {
+	if terminalReports.Match(raw) {
+		return
+	}
+	m.inputMu.Lock()
+	m.lastInputAt[terminalID] = time.Now()
+	m.inputMu.Unlock()
 }
 
 // terminalReports matches bytes the terminal view sends on its own, not typed by
@@ -667,6 +675,7 @@ func (c *connState) openTerminal(id string, rows, cols uint16, role string) {
 		},
 		c.mgr.log)
 	a.lockInput = func() func() { return c.mgr.lockInputFence(id) }
+	a.onInputReplay = func(raw []byte) { c.mgr.recordInputAt(id, raw) }
 	if err := c.mgr.track(a); err != nil {
 		c.enqueue(serverMsg{Ch: chTerminal, ID: id, Type: msgError, Error: err.Error()})
 		return

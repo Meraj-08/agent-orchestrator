@@ -308,6 +308,49 @@ func TestHoldInputFencesInputBufferedDuringAttach(t *testing.T) {
 	eventually(t, time.Second, func() bool { return string(pty.writtenBytes()) == "draft" })
 }
 
+func TestBufferedInputReplayUpdatesLastInputAt(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		data  string
+		typed bool
+	}{
+		{name: "human draft", data: "human draft", typed: true},
+		{name: "terminal report", data: "\x1b[I"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pty := newFakePTY()
+			attached := make(chan struct{})
+			src := &fakeSource{alive: true, attachFn: func(ctx context.Context, _, _ uint16) (ports.Stream, error) {
+				select {
+				case <-attached:
+					return pty, nil
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}}
+			mgr := NewManager(src, nil, testLogger(), WithHeartbeat(0))
+			defer mgr.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			c := &connState{mgr: mgr, conn: newFakeConn(), ctx: ctx, cancel: cancel, out: newOutQueue(), terms: map[string]*attachment{}, writers: map[string]*inputWriter{}}
+			defer c.cleanup()
+			c.openTerminal("t1", 24, 80, "")
+			mgr.writeInput("t1", c.lookup("t1"), []byte(tc.data), func() {})
+			replayedAt := time.Now()
+			close(attached)
+			eventually(t, time.Second, func() bool { return string(pty.writtenBytes()) == tc.data })
+			lastInputAt, release := mgr.HoldInput("t1")
+			defer release()
+			if tc.typed && lastInputAt.Before(replayedAt) {
+				t.Fatalf("last input at %v predates replay at %v; freshly replayed typing must get a new settle window", lastInputAt, replayedAt)
+			}
+			if !tc.typed && !lastInputAt.IsZero() {
+				t.Fatalf("terminal report changed human input timestamp to %v", lastInputAt)
+			}
+		})
+	}
+}
+
 func TestHeldFenceDoesNotStallTheConnectionsOtherTerminals(t *testing.T) {
 	// HoldInput fences AO's composer check and write against human keystrokes
 	// without dropping them (unlike BeginInputDrain): t1's keys wait on its fence

@@ -54,6 +54,8 @@ type attachment struct {
 	// lockInput takes the terminal's write fence (see Manager.lockInputFence);
 	// nil means unfenced.
 	lockInput func() (unlock func())
+	// onInputReplay observes bytes replayed into the PTY while lockInput is held.
+	onInputReplay func([]byte)
 
 	maxReattach int
 	resetGrace  time.Duration
@@ -337,7 +339,10 @@ func (a *attachment) flushPendingInput(p ports.Stream) error {
 	a.pendingInput = nil
 	a.mu.Unlock()
 	for i, input := range pending {
-		_, err := p.Write(input.data)
+		n, err := p.Write(input.data)
+		if n > 0 && a.onInputReplay != nil {
+			a.onInputReplay(input.data)
+		}
 		releaseInput(input.release)
 		if err != nil {
 			releasePendingInput(pending[i+1:])

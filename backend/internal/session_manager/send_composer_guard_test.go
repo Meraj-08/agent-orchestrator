@@ -405,11 +405,11 @@ func TestComposerBusyCheck_FencedRecheckWaitsForAKeystrokeToRender(t *testing.T)
 func TestComposerBusyCheck_FencedRecheckCatchesDraftAfterProbe(t *testing.T) {
 	// The unfenced multi-sample probe reads an empty composer, but a keystroke
 	// lands before the write. Once the probe proves empty, the guard fences input
-	// and re-checks on one frame: the now-present draft must be caught and the
+	// and repeats the draft proof: the now-present draft must be caught and the
 	// send refused, closing the probe/write race a read of LastInputAt cannot.
 	// The probe short-circuits to "empty" on its first non-draft frame (one
 	// capture), then the fenced re-check captures the draft that has since appeared.
-	m, _, _ := draftProbeManager(transitionSurfaceAgent{}, idleTerminalOutput, draftTerminalOutput)
+	m, rt, _ := draftProbeManager(transitionSurfaceAgent{}, idleTerminalOutput, draftTerminalOutput)
 	gate := &fencingInputGate{}
 	m.SetTerminalInputGate(gate)
 
@@ -422,6 +422,9 @@ func TestComposerBusyCheck_FencedRecheckCatchesDraftAfterProbe(t *testing.T) {
 	}
 	if gate.held != 1 || gate.released != 1 {
 		t.Fatalf("fence held=%d released=%d, want 1/1 (acquired then released on refusal)", gate.held, gate.released)
+	}
+	if rt.styledOutputCalls != 1+sendComposerDraftSamples {
+		t.Fatalf("captures = %d, want an empty probe followed by %d fenced draft samples", rt.styledOutputCalls, sendComposerDraftSamples)
 	}
 }
 
@@ -446,6 +449,18 @@ func TestComposerBusyCheck_FenceHeldForDeliveryUntilRelease(t *testing.T) {
 	release()
 	if gate.released != 1 {
 		t.Fatalf("release did not free the fence: released=%d", gate.released)
+	}
+}
+
+func TestComposerBusyCheck_FencedDraftRequiresConsecutiveSamples(t *testing.T) {
+	m, rt, _ := draftProbeManager(transitionSurfaceAgent{}, idleTerminalOutput, draftTerminalOutput, idleTerminalOutput)
+	m.SetTerminalInputGate(&fencingInputGate{})
+	busy, release := m.composerBusyCheck()(context.Background(), draftProbeRecord(domain.ActivityIdle))
+	if release != nil {
+		defer release()
+	}
+	if busy {
+		t.Fatalf("refused after %d captures despite only one draft frame and no accepted keystroke", rt.styledOutputCalls)
 	}
 }
 
@@ -491,5 +506,68 @@ func TestSend_EnterNudgeStillRunsWhenNobodyTyped(t *testing.T) {
 	}
 	if want := m.sendConfirm.maxAttempts; len(msg.msgs) != want {
 		t.Fatalf("Send calls = %d, want %d (the prompt plus its Enter nudges)", len(msg.msgs), want)
+	}
+}
+
+type confirmationInputGate struct {
+	recordingInputGate
+	held bool
+}
+
+func (g *confirmationInputGate) HoldInput(string) (time.Time, func()) {
+	g.held = true
+	return g.lastInputAt, func() { g.held = false }
+}
+
+type confirmationInputLease struct {
+	acquires int
+	gate     *confirmationInputGate
+}
+
+func (l *confirmationInputLease) AcquireSessionInput(domain.SessionID) (func(), bool) {
+	l.acquires++
+	if l.acquires == 2 && !l.gate.held {
+		// Typing lands while the retry acquires admission, after the old
+		// unfenced timestamp check but before its Enter write.
+		l.gate.lastInputAt = time.Now()
+	}
+	return func() {}, true
+}
+
+func TestSend_ConfirmationEnterRechecksInputAfterAdmission(t *testing.T) {
+	m, msg := composerSendTestManager(t, idleTerminalOutput)
+	m.agents = singleAgent{agent: nudgeSafeSurfaceAgent{}}
+	gate := &confirmationInputGate{}
+	m.SetTerminalInputGate(gate)
+	m.messenger.SetInputLease(&confirmationInputLease{gate: gate})
+
+	err := m.Send(context.Background(), "s1", "run the tests", nil)
+	if !errors.Is(err, ErrDeliveryUnconfirmed) {
+		t.Fatalf("Send error = %v, want ErrDeliveryUnconfirmed", err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("retry Enter reached human draft: got %d sends (%q), want only original delivery", len(msg.msgs), msg.msgs)
+	}
+}
+
+func TestSend_ConfirmationEnterHoldsInputFence(t *testing.T) {
+	m, msg := composerSendTestManager(t, idleTerminalOutput)
+	m.agents = singleAgent{agent: nudgeSafeSurfaceAgent{}}
+	gate := &confirmationInputGate{}
+	m.SetTerminalInputGate(gate)
+	msg.onSend = func(_ domain.SessionID, message string) {
+		if message == "" && !gate.held {
+			t.Error("confirmation Enter was written without holding the input fence")
+		}
+	}
+	err := m.Send(context.Background(), "s1", "run the tests", nil)
+	if !errors.Is(err, ErrDeliveryUnconfirmed) {
+		t.Fatalf("Send error = %v, want ErrDeliveryUnconfirmed", err)
+	}
+	if len(msg.msgs) != m.sendConfirm.maxAttempts {
+		t.Fatalf("Send calls = %d, want %d", len(msg.msgs), m.sendConfirm.maxAttempts)
+	}
+	if gate.held {
+		t.Fatal("confirmation left the input fence held")
 	}
 }

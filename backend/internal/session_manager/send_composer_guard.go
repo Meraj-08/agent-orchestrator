@@ -123,49 +123,6 @@ func composerFrameIsDraft(observation ports.TerminalSurfaceObservation) bool {
 	return true
 }
 
-// composerDraftOnFencedFrame captures the screen once and reports whether it
-// positively shows an unsent human draft. It runs under the held input fence,
-// immediately before the write, to confirm the composer is still empty after the
-// unfenced multi-sample probe — closing the race where a keystroke lands between
-// the probe's last frame and the paste (#5711). lastInputAt is the newest
-// keystroke the fence saw accepted; one accepted during the probe may not be drawn
-// yet, so the capture waits out its settle window first (later keystrokes queue
-// behind the fence meanwhile). A frame it cannot read, or that shows provider
-// chrome or an empty composer, reports false (deliver).
-func (m *Manager) composerDraftOnFencedFrame(ctx context.Context, rec domain.SessionRecord, lastInputAt time.Time) bool {
-	if m.agents == nil {
-		return false
-	}
-	agent, ok := m.agents.Agent(rec.Harness)
-	if !ok {
-		return false
-	}
-	surfaceInspector, ok := agent.(ports.TerminalSurfaceInspector)
-	if !ok {
-		return false
-	}
-	styledOutput, ok := m.runtime.(ports.StyledTerminalOutputReader)
-	if !ok {
-		return false
-	}
-	handle := runtimeHandle(rec.Metadata)
-	if handle.ID == "" {
-		return false
-	}
-	_, settle, limit := m.composerProbeTiming()
-	probeCtx, cancel := context.WithTimeout(ctx, limit)
-	defer cancel()
-	if !settleAfterInput(probeCtx, lastInputAt, settle) {
-		return m.composerProbeGaveUp(probeCtx, rec)
-	}
-	output, err := styledOutput.GetStyledOutput(probeCtx, handle, sendComposerProbeLines)
-	if err != nil {
-		m.logger.Warn("send: composer draft re-check failed under input fence; delivering", "sessionID", rec.ID, "error", err)
-		return false
-	}
-	return composerFrameIsDraft(surfaceInspector.InspectTerminalSurface(output))
-}
-
 // settleAfterInput waits until settle has passed since lastInputAt, so a screen
 // captured afterwards has drawn that keystroke. It reports false when ctx ended
 // first.
@@ -221,11 +178,11 @@ func (m *Manager) composerProbeTiming() (poll, settle, limit time.Duration) {
 // stop one arriving between the probe's final empty frame and the paste: the
 // guard's input lease is shared admission, not mutual exclusion against terminal
 // input. So once the probe proves empty, hold the terminal input fence (keystrokes
-// block, not dropped), let the newest keystroke the fence reports settle, confirm
-// on one fenced frame that the composer is still empty, and keep the fence held
-// through the guard's write. A keystroke that landed during the probe is caught
-// by the fenced frame; one arriving after is made to wait until the write
-// completes, so neither concatenates with the payload (#5711).
+// block, not dropped), let the newest keystroke the fence reports settle, repeat
+// the draft proof, and keep the fence held through the guard's write. A keystroke
+// that landed during the probe is caught by the fenced probe; one arriving after
+// waits until the write completes, so neither concatenates with the payload
+// (#5711).
 func (m *Manager) composerBusyCheck() func(context.Context, domain.SessionRecord) (bool, func()) {
 	return func(ctx context.Context, rec domain.SessionRecord) (bool, func()) {
 		if m.composerHoldsDraft(ctx, rec, m.lastTerminalInputAt(rec)) {
@@ -237,7 +194,7 @@ func (m *Manager) composerBusyCheck() func(context.Context, domain.SessionRecord
 			// deliver unsynchronized, exactly as before this mechanism existed.
 			return false, nil
 		}
-		if m.composerDraftOnFencedFrame(ctx, rec, fencedInputAt) {
+		if m.composerHoldsDraft(ctx, rec, fencedInputAt) {
 			release()
 			return true, nil
 		}
