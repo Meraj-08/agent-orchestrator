@@ -170,7 +170,12 @@ function DockHeader({
 				<p className="text-caption leading-snug text-muted-foreground">
 					Question{pager ? <span className="tabular-nums"> · {pager}</span> : null}
 				</p>
-				<p id={id} className="mt-0.5 whitespace-pre-wrap break-words text-sm font-medium leading-snug text-foreground">
+				{/* A long question scrolls inside its own cap so the answers and actions below keep their room. */}
+				<p
+					id={id}
+					data-testid="elicitation-question"
+					className="chat-composer-scrollbar mt-0.5 max-h-[min(25vh,8rem)] overflow-y-auto overscroll-contain whitespace-pre-wrap break-words text-sm font-medium leading-snug text-foreground"
+				>
 					{title}
 				</p>
 			</div>
@@ -239,25 +244,30 @@ function URLRequest({
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
 			<DockHeader title={activity.detail?.message || activity.summary} />
-			{parsed ? (
-				<div className="flex min-h-10 min-w-0 items-center gap-2.5 px-3 py-2">
-					<div className="min-w-0 flex-1">
-						<p className="truncate text-xs leading-relaxed text-foreground">{parsed.hostname}</p>
-						<p className="mt-0.5 break-all font-mono text-caption leading-relaxed text-muted-foreground">
-							{parsed.href}
-						</p>
+			<div
+				data-testid="elicitation-scroll-body"
+				className="chat-composer-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain"
+			>
+				{parsed ? (
+					<div className="flex min-h-10 min-w-0 items-center gap-2.5 px-3 py-2">
+						<div className="min-w-0 flex-1">
+							<p className="truncate text-xs leading-relaxed text-foreground">{parsed.hostname}</p>
+							<p className="mt-0.5 break-all font-mono text-caption leading-relaxed text-muted-foreground">
+								{parsed.href}
+							</p>
+						</div>
 					</div>
-				</div>
-			) : (
-				<p role="alert" className="px-3 py-2 text-xs leading-snug text-destructive">
-					The provider supplied an unsafe or invalid URL. It was not opened.
-				</p>
-			)}
-			{openError ? (
-				<p role="alert" className="px-3 pb-1 text-xs leading-snug text-destructive">
-					{openError}
-				</p>
-			) : null}
+				) : (
+					<p role="alert" className="px-3 py-2 text-xs leading-snug text-destructive">
+						The provider supplied an unsafe or invalid URL. It was not opened.
+					</p>
+				)}
+				{openError ? (
+					<p role="alert" className="px-3 pb-1 text-xs leading-snug text-destructive">
+						{openError}
+					</p>
+				) : null}
+			</div>
 			<DockFooter>
 				<div className="flex items-center gap-1.5">
 					<button type="button" className={QUIET_ACTION_PILL} disabled={disabled} onClick={() => onResolve("cancel")}>

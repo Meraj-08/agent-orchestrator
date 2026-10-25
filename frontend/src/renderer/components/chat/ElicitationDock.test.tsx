@@ -464,4 +464,39 @@ describe("ElicitationDock", () => {
 		expect(scrollBody).not.toContainElement(continueBtn);
 	});
 
+	it("caps a long question so the answers and actions keep their room", () => {
+		const longQuestion = "Before I refactor the scheduler, confirm the scope. ".repeat(20).trim();
+		const schema = {
+			type: "object" as const,
+			properties: { answer: { type: "string", title: "Answer" } },
+			required: ["answer"],
+		};
+		render(
+			<ElicitationDock activity={activity({ inputMode: "form", message: longQuestion, schema })} onResolve={vi.fn()} />,
+		);
+
+		const question = screen.getByTestId("elicitation-question");
+		expect(question).toHaveTextContent(longQuestion);
+		expect(question).toHaveClass("max-h-[min(25vh,8rem)]", "overflow-y-auto");
+		expect(screen.getByTestId("elicitation-scroll-body")).toContainElement(screen.getByLabelText(/Answer/));
+		expect(question).not.toContainElement(screen.getByRole("button", { name: "Continue" }));
+	});
+
+	it("scrolls a long URL inside the dock with the consent actions pinned", () => {
+		const longURL = `https://console.anthropic.com/oauth/authorize?${"scope=org%3Acreate_api_key&".repeat(40)}`;
+		render(
+			<ElicitationDock
+				activity={activity({ inputMode: "url", url: longURL, message: "Sign in" })}
+				onResolve={vi.fn()}
+			/>,
+		);
+
+		expect(screen.getByTestId("elicitation-dock")).toHaveClass("max-h-[min(65vh,32rem)]", "flex-col");
+		const scrollBody = screen.getByTestId("elicitation-scroll-body");
+		expect(scrollBody).toHaveClass("min-h-0", "flex-1", "overflow-y-auto");
+		expect(scrollBody).toContainElement(screen.getByText(longURL));
+		for (const name of ["Cancel", "Decline", "Open console.anthropic.com"]) {
+			expect(scrollBody).not.toContainElement(screen.getByRole("button", { name }));
+		}
+	});
 });
