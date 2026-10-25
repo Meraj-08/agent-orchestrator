@@ -262,12 +262,13 @@ function URLRequest({
 						The provider supplied an unsafe or invalid URL. It was not opened.
 					</p>
 				)}
-				{openError ? (
-					<p role="alert" className="px-3 pb-1 text-xs leading-snug text-destructive">
-						{openError}
-					</p>
-				) : null}
 			</div>
+			{/* Pinned beside the actions it reports on, so a long URL cannot scroll it out of view. */}
+			{openError ? (
+				<p role="alert" className="shrink-0 px-3 pb-1 pt-1.5 text-xs leading-snug text-destructive">
+					{openError}
+				</p>
+			) : null}
 			<DockFooter>
 				<div className="flex items-center gap-1.5">
 					<button type="button" className={QUIET_ACTION_PILL} disabled={disabled} onClick={() => onResolve("cancel")}>

@@ -499,4 +499,19 @@ describe("ElicitationDock", () => {
 			expect(scrollBody).not.toContainElement(screen.getByRole("button", { name }));
 		}
 	});
+
+	it("keeps an open failure beside the actions when a long URL scrolls", async () => {
+		const user = userEvent.setup();
+		vi.spyOn(aoBridge.app, "openExternal").mockRejectedValue(new Error("refused"));
+		const onResolve = vi.fn();
+		const longURL = `https://console.anthropic.com/oauth/authorize?${"scope=org%3Acreate_api_key&".repeat(40)}`;
+		render(<ElicitationDock activity={activity({ inputMode: "url", url: longURL, message: "Sign in" })} onResolve={onResolve} />);
+
+		await user.click(screen.getByRole("button", { name: "Open console.anthropic.com" }));
+
+		const error = await screen.findByRole("alert");
+		expect(error).toHaveTextContent("The link could not be opened. Nothing was approved.");
+		expect(screen.getByTestId("elicitation-scroll-body")).not.toContainElement(error);
+		expect(onResolve).not.toHaveBeenCalled();
+	});
 });
