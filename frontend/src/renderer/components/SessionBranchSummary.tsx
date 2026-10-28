@@ -49,6 +49,9 @@ type GitFacts = {
 
 type GitActionPlan = { primary: SessionGitActionKind; menu: SessionGitActionKind[] };
 
+/** The branch rows and git action, handed to the PR they land on; `note` stands in for them while it is folded. */
+export type BranchWork = { content: ReactNode; note?: string };
+
 export function SessionBranchSummary({
 	hostId,
 	onOpenFiles,
@@ -62,7 +65,12 @@ export function SessionBranchSummary({
 	onOpenFiles: () => void;
 	/** The open or draft PR that new commits would update. */
 	openPRNumber?: number;
-	pullRequests: ReactNode;
+	/**
+	 * The PR cards. As a function it receives the branch rows and git action
+	 * to show inside the open PR new commits update; undefined when there is
+	 * none, and the rows then stay under the cards.
+	 */
+	pullRequests: ReactNode | ((work: BranchWork | undefined) => ReactNode);
 	session: WorkspaceSession;
 	/** Head commits of the session's merged or closed PRs. */
 	shippedHeadShas?: string[];
@@ -127,8 +135,14 @@ export function SessionBranchSummary({
 		return () => clearTimeout(timer);
 	}, [clearPending, key, pending]);
 
-	const cards = pullRequests ? <div className="flex flex-col gap-2 pb-3 last:pb-0">{pullRequests}</div> : null;
-	if (!showGit) return cards ? <InspectorSection surface={false} title={title}>{cards}</InspectorSection> : null;
+	const renderCards = (work: BranchWork | undefined) => {
+		const content = typeof pullRequests === "function" ? pullRequests(work) : pullRequests;
+		return content ? <div className="flex flex-col gap-2 pb-3 last:pb-0">{content}</div> : null;
+	};
+	if (!showGit) {
+		const cards = renderCards(undefined);
+		return cards ? <InspectorSection surface={false} title={title}>{cards}</InspectorSection> : null;
+	}
 
 	const commitsRow = commitsRowView(facts, t);
 	// The daemon names the base it counted against; without one, behind is unknown.
@@ -158,44 +172,57 @@ export function SessionBranchSummary({
 		);
 	}
 
+	const workRows = (
+		<>
+			{facts.uncommitted.length > 0 ? (
+				<GitStatusRow
+					additions={sum(facts.uncommitted, "additions")}
+					deletions={sum(facts.uncommitted, "deletions")}
+					icon={<Pencil aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />}
+					label={t("inspector.git.uncommittedFiles", { count: facts.uncommitted.length })}
+					onClick={onOpenFiles}
+				/>
+			) : null}
+			{commitsRow ? (
+				<GitStatusRow
+					additions={sum(facts.committed, "additions")}
+					deletions={sum(facts.committed, "deletions")}
+					icon={<GitCommitHorizontal aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />}
+					label={commitsRow.label}
+					note={commitsRow.note}
+					noteTone={commitsRow.noteTone}
+					onClick={onOpenFiles}
+				/>
+			) : null}
+			{behind > 0 ? (
+				<BranchFactRow
+					icon={<GitMerge aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />}
+					label={t("inspector.git.behind", { base: behindBase, count: behind })}
+					note={facts.branch?.conflicts ? t("inspector.git.conflicts") : undefined}
+				/>
+			) : null}
+			{action ? <div className={hasWork ? "mt-3" : undefined}>{action}</div> : null}
+			{sendError ? (
+				<p className="mt-1.5 text-xs leading-normal text-error" role="status">
+					{sendError}
+				</p>
+			) : null}
+		</>
+	);
+	// The rows go inside the open PR new commits update, so that PR's section
+	// holds its work; folded, its header keeps the work in sight.
+	const workInPR = typeof pullRequests === "function" && openPRNumber !== undefined && (hasWork || action !== null || sendError !== null);
+	const unpushed = facts.branch?.unpushed ?? 0;
+	const workNote = facts.uncommitted.length > 0
+		? t("inspector.git.uncommittedFiles", { count: facts.uncommitted.length })
+		: unpushed > 0 ? t("inspector.git.someNotPushed", { count: unpushed }) : undefined;
+
 	return (
 		<InspectorSection surface={false} title={title}>
 			<section aria-label={t("inspector.branch")} className="flex flex-col" data-testid="inspector-branch">
 				{branch || naming ? <BranchLine base={facts.base} branch={branch} naming={naming} /> : null}
-				{cards}
-				{facts.uncommitted.length > 0 ? (
-					<GitStatusRow
-						additions={sum(facts.uncommitted, "additions")}
-						deletions={sum(facts.uncommitted, "deletions")}
-						icon={<Pencil aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />}
-						label={t("inspector.git.uncommittedFiles", { count: facts.uncommitted.length })}
-						onClick={onOpenFiles}
-					/>
-				) : null}
-				{commitsRow ? (
-					<GitStatusRow
-						additions={sum(facts.committed, "additions")}
-						deletions={sum(facts.committed, "deletions")}
-						icon={<GitCommitHorizontal aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />}
-						label={commitsRow.label}
-						note={commitsRow.note}
-						noteTone={commitsRow.noteTone}
-						onClick={onOpenFiles}
-					/>
-				) : null}
-				{behind > 0 ? (
-					<BranchFactRow
-						icon={<GitMerge aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />}
-						label={t("inspector.git.behind", { base: behindBase, count: behind })}
-						note={facts.branch?.conflicts ? t("inspector.git.conflicts") : undefined}
-					/>
-				) : null}
-				{action ? <div className={hasWork ? "mt-3" : undefined}>{action}</div> : null}
-				{sendError ? (
-					<p className="mt-1.5 text-xs leading-normal text-error" role="status">
-						{sendError}
-					</p>
-				) : null}
+				{renderCards(workInPR ? { content: workRows, note: workNote } : undefined)}
+				{workInPR ? null : workRows}
 			</section>
 		</InspectorSection>
 	);

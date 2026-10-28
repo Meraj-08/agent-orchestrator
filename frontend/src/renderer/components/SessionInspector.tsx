@@ -76,7 +76,7 @@ import { ScriptRunPanel } from "./ScriptRunPanel";
 import { useCloudScriptRuns } from "../hooks/useCloudScriptRuns";
 import { latestScriptRun } from "../lib/cloud-script-runs";
 import { ResumeAgentControl } from "./ResumeAgentControl";
-import { SessionBranchSummary } from "./SessionBranchSummary";
+import { SessionBranchSummary, type BranchWork } from "./SessionBranchSummary";
 import { SessionAccountSummary } from "./SessionAccountSummary";
 import {
 	sessionScmSummaryQueryKey,
@@ -472,22 +472,30 @@ const SummaryView = memo(function SummaryView({
 					onOpenFiles={onOpenFiles}
 					openPRNumber={openPRNumber}
 					shippedHeadShas={prSummaries.filter((pr) => pr.state === "merged" || pr.state === "closed").map((pr) => pr.headSha)}
-					pullRequests={hasPRs ? (
+					pullRequests={hasPRs ? (work: BranchWork | undefined) => (
 						<>
-							{prSummaries.map((pr) => (
-								<PRSummaryCard
-									canOpenReviews={canOpenReviews}
-									key={pr.url || pr.htmlUrl || pr.number}
-									showRepository={prsSpanRepositories(prSummaries)}
-									onOpenReviews={onOpenReviews}
-									pr={pr}
-									hostId={hostId}
-									sessionId={session.id}
-									cloudOrgId={session.cloud?.orgId}
-									guest={session.cloud?.shared === true}
-									projectId={session.workspaceId}
-								/>
-							))}
+							{prSummaries.length > 0 ? (
+								// One card; each PR is a section that folds to its header row.
+								<div className="flex min-w-0 flex-col divide-y divide-(--color-border-settings-input) rounded-lg border border-(--color-border-settings-input) bg-(--color-bg-settings-input) px-3 py-1" data-testid="pr-sections">
+									{prSummaries.map((pr) => (
+										<PRSummaryCard
+											canOpenReviews={canOpenReviews}
+											current={pr.number === openPRNumber || prSummaries.length === 1}
+											work={pr.number === openPRNumber ? work : undefined}
+											key={pr.url || pr.htmlUrl || pr.number}
+											showRepository={prsSpanRepositories(prSummaries)}
+											onOpenReviews={onOpenReviews}
+											pr={pr}
+											hostId={hostId}
+											sessionId={session.id}
+											cloudOrgId={session.cloud?.orgId}
+											guest={session.cloud?.shared === true}
+											layout="section"
+											projectId={session.workspaceId}
+										/>
+									))}
+								</div>
+							) : null}
 							{linkedPRs.map((pr) => <LinkedPRCard external={isExternalRepository(pr, projectQuery.data)} key={pr.url} pr={pr} />)}
 						</>
 					) : null}
@@ -921,8 +929,17 @@ function updateSessionMergePolicy(
 	}));
 }
 
+/** Per-session PR section expansion the person chose; outlives the section's unmount. */
+const prExpansion = new Map<string, boolean>();
+
+/** Forgets every remembered PR section toggle; for tests. */
+export function resetPRSectionExpansion() {
+	prExpansion.clear();
+}
+
 export function PRSummaryCard({
 	canOpenReviews,
+	current = false,
 	hostId,
 	cloudOrgId,
 	guest = false,
@@ -931,9 +948,13 @@ export function PRSummaryCard({
 	projectId,
 	liveSessionId,
 	sessionId,
+	layout = "card",
 	showRepository = false,
+	work,
 }: {
 	canOpenReviews: boolean;
+	/** As a section, starts open: the PR new commits update, or the session's only PR. */
+	current?: boolean;
 	hostId?: string;
 	cloudOrgId?: string;
 	/** Reached through a share: this person asks the project's owner to merge. */
@@ -945,10 +966,23 @@ export function PRSummaryCard({
 	/** The session on screen, whose live stream says when merge requests change; the card's own by default. */
 	liveSessionId?: string;
 	sessionId: string;
+	/** "section" folds to a header row inside a card shared with other PRs; "card" stands alone. */
+	layout?: "card" | "section";
 	/** Label the card with its repository: the session has PRs on several. */
 	showRepository?: boolean;
+	/** The branch rows and git action, when new commits land on this PR. */
+	work?: BranchWork;
 }) {
 	const { t } = useTranslation();
+	const stateKey = `${hostId ?? ""}:${sessionId}:${pr.url || pr.number}`;
+	// The PR new commits update starts open, every other PR folded; a toggle is remembered.
+	const [expanded, setExpandedState] = useState(() => prExpansion.get(stateKey) ?? current);
+	const toggle = () => setExpandedState((open) => {
+		prExpansion.set(stateKey, !open);
+		return !open;
+	});
+	const bodyId = useId();
+	const reduceMotion = useReducedMotion();
 	const queryClient = useQueryClient();
 	const workspaceKey = workspaceQueryKeyForHost(hostId);
 	const { client: cloudClient, baseUrl: cloudBaseUrl } = useCloudCp();
@@ -1010,9 +1044,10 @@ export function PRSummaryCard({
 			</button>
 		) : undefined,
 	};
-	return (
+	const cardView = (
 		<InspectorPullRequestCardView
 			countNounLabel={(count, noun) => `${count} ${t(prNounKeys[noun], { count })}`}
+			headerless={layout === "section"}
 			description={<PullRequestDescription cloud={Boolean(cloudOrgId)} pr={pr} />}
 			externalIcon={<ArrowUpRight aria-hidden="true" className="size-icon-2xs shrink-0" strokeWidth={2} />}
 			externalLink={ProductExternalLink}
@@ -1059,6 +1094,46 @@ export function PRSummaryCard({
 			pr={viewModel}
 			pullRequestIcon={<GitPullRequest className="size-icon-sm shrink-0" aria-hidden="true" />}
 		/>
+	);
+	if (layout === "card") return cardView;
+	const state = prStateIcon[pr.state];
+	return (
+		<section className="flex min-w-0 flex-col py-1">
+			<InfoRow
+				action={<InfoRowLink ariaLabel={t("inspector.openPR", { number: pr.number })} href={viewModel.href} />}
+				ariaControls={expanded ? bodyId : undefined}
+				expanded={expanded}
+				icon={state.icon}
+				iconClassName={state.className}
+				label={
+					<>
+						<span className="font-medium">{viewModel.repositoryLabel ? `${viewModel.repositoryLabel} ` : ""}PR #{pr.number}</span>
+						{pr.title ? <span> {pr.title}</span> : null}
+						{/* The icon carries the state; keep it for screen readers. */}
+						<span className="sr-only"> {viewModel.stateLabel}</span>
+					</>
+				}
+				onClick={toggle}
+				title={pr.title}
+			/>
+			{/* Folded, the section keeps uncommitted or unpushed work in sight. */}
+			{!expanded && work?.note ? <p className="m-0 pb-1 pl-6 text-caption text-status-in-review">{work.note}</p> : null}
+			<AnimatePresence initial={false}>
+				{expanded ? (
+					<motion.div
+						animate={{ height: "auto", opacity: 1, transitionEnd: { overflow: "visible" } }}
+						className="min-w-0"
+						exit={{ height: 0, opacity: 0, overflow: "hidden" }}
+						id={bodyId}
+						initial={{ height: 0, opacity: 0, overflow: "hidden" }}
+						transition={reduceMotion ? { duration: 0 } : { duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
+					>
+						{cardView}
+						{work ? <div className="flex min-w-0 flex-col border-t border-(--color-border-settings-input) pt-2 pb-2">{work.content}</div> : null}
+					</motion.div>
+				) : null}
+			</AnimatePresence>
+		</section>
 	);
 }
 

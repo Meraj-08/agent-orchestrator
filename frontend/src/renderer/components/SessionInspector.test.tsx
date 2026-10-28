@@ -10,7 +10,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SessionInspector } from "./SessionInspector";
+import { resetPRSectionExpansion, SessionInspector } from "./SessionInspector";
 import { TooltipProvider } from "./ui/tooltip";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
@@ -310,6 +310,7 @@ const reviewState = (n: number, status: string, targetSha = `sha-${n}`) => ({
 });
 
 beforeEach(() => {
+  resetPRSectionExpansion();
   cloudCpMock.cancelSessionReviews.mockReset();
   cloudCpMock.getSessionReviewState.mockReset();
   cloudCpMock.inspectSessionReviewerHarnesses.mockReset();
@@ -585,7 +586,7 @@ describe("SessionInspector PR section", () => {
     );
   // The card shows only the merge-readiness line; its status rows open on click.
   const openReadiness = () => {
-    for (const toggle of document.querySelectorAll<HTMLElement>("article button[aria-expanded='false'][title]")) {
+    for (const toggle of document.querySelectorAll<HTMLElement>("[data-testid='pr-sections'] button[aria-expanded='false'][title]")) {
       fireEvent.click(toggle);
     }
   };
@@ -688,16 +689,11 @@ describe("SessionInspector PR section", () => {
     expect(
       prSection("Pull request").getByText("Checks passing"),
     ).toBeInTheDocument();
+    // The section header carries the number, title and an external link; its icon carries the state.
     expect(
-      prSection("Pull request").getByRole("link", { name: "PR 7" }),
-    ).toHaveClass("text-sm");
-    expect(
-      prSection("Pull request").getByRole("link", { name: "PR 7" }),
+      prSection("Pull request").getByRole("link", { name: "Open PR #7" }),
     ).toHaveAttribute("href", "https://github.com/acme/repo/pull/7");
-    expect(prSection("Pull request").getByText("open")).toHaveClass(
-      "text-[9px]",
-      "leading-none",
-    );
+    expect(prSection("Pull request").getByText("open")).toHaveClass("sr-only");
     expect(
       prSection("Pull request").getByRole("button", { name: "Merge PR #7" }),
     ).toBeInTheDocument();
@@ -911,12 +907,10 @@ describe("SessionInspector PR section", () => {
 
     const card = prSection("Pull request")
       .getByText("PR #7")
-      .closest("article") as HTMLElement;
-    expect(within(card).getByText("merged", { exact: true })).toHaveClass(
-      "border-border-strong",
-      "bg-overlay",
-      "text-success",
-    );
+      .closest("section") as HTMLElement;
+    // A lone merged PR still starts open; the header icon and its label carry the state.
+    expect(within(card).getByText("merged", { exact: true })).toHaveClass("sr-only");
+    expect(within(card).getByText("PR #7").closest("button")).toHaveAttribute("aria-expanded", "true");
     expect(
       within(card).queryByText("Pull request merged"),
     ).not.toBeInTheDocument();
@@ -973,7 +967,7 @@ describe("SessionInspector PR section", () => {
     );
     const prCard = prSection("Pull request")
       .getByText("PR #7")
-      .closest("article") as HTMLElement;
+      .closest("section") as HTMLElement;
     const appearsBefore = (first: HTMLElement, second: HTMLElement) =>
       Boolean(
         first.compareDocumentPosition(second) &
@@ -1095,10 +1089,25 @@ describe("SessionInspector PR section", () => {
 
     const card = prSection("Pull request")
       .getByText("PR #7")
-      .closest("article") as HTMLElement;
+      .closest("section") as HTMLElement;
     openReadiness();
     expect(within(card).getByText("Checks failing")).toBeInTheDocument();
     expect(within(card).queryByText("CI failures not injected")).not.toBeInTheDocument();
+  });
+
+  it("puts several PRs in one card and opens only the one new commits update", async () => {
+    renderWithQuery(
+      <SessionInspector session={session([pr(41, "open"), pr(42, "draft")])} />,
+    );
+    const sections = screen.getByTestId("pr-sections");
+    const header = (n: number) => within(sections).getByText(`PR #${n}`).closest("button") as HTMLElement;
+    expect(header(41)).toHaveAttribute("aria-expanded", "true");
+    expect(header(42)).toHaveAttribute("aria-expanded", "false");
+
+    await userEvent.click(header(42));
+
+    expect(header(42)).toHaveAttribute("aria-expanded", "true");
+    expect(header(41)).toHaveAttribute("aria-expanded", "true");
   });
 
   it("links each PR to its url", () => {
@@ -1109,10 +1118,6 @@ describe("SessionInspector PR section", () => {
       prSection("Pull requests (2)").getByRole("link", { name: "Open PR #41" }),
       prSection("Pull requests (2)").getByRole("link", { name: "Open PR #42" }),
     ];
-    expect(links[0]).toHaveClass(
-      "text-settings-label",
-      "hover:text-settings-label",
-    );
     expect(links.map((a) => a.getAttribute("href"))).toEqual([
       "https://example.com/pr/41",
       "https://example.com/pr/42",
@@ -4940,6 +4945,31 @@ describe("SessionInspector branch summary", () => {
     await waitFor(() => expect(sendCalls()).toHaveLength(1));
     expect(sendCalls()[0][1].body.message).toContain("push this branch to update PR #7");
     expect(await screen.findByRole("button", { name: "Committing and pushing…" })).toBeDisabled();
+  });
+
+  it("puts the branch rows inside the PR new commits update and keeps them in sight when folded", async () => {
+    mockGitState({ uncommitted: [changedFile("src/c.ts", 4, 0)], committed: [changedFile("src/a.ts", 5, 0)] });
+    renderWithQuery(<SessionInspector session={session([pr(7, "open")], { branchState: pushed(3) })} />);
+
+    const sections = await screen.findByTestId("pr-sections");
+    expect(await within(sections).findByText("1 uncommitted file")).toBeInTheDocument();
+    expect(within(sections).getByRole("button", { name: "Commit & push to #7" })).toBeInTheDocument();
+
+    const header = within(sections).getByText("PR #7").closest("button") as HTMLElement;
+    await userEvent.click(header);
+
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    // Folded, a line under the header still says there is work to commit.
+    expect(within(sections).getByText("1 uncommitted file", { selector: "p" })).toBeInTheDocument();
+
+  });
+
+  it("keeps the branch rows under the cards when no PR is open", async () => {
+    mockGitState({ uncommitted: [changedFile("src/c.ts", 4, 0)] });
+    renderWithQuery(<SessionInspector session={session([pr(7, "merged")])} />);
+
+    expect(await branch().findByText("1 uncommitted file")).toBeInTheDocument();
+    expect(within(screen.getByTestId("pr-sections")).queryByText("1 uncommitted file")).not.toBeInTheDocument();
   });
 
   it("shows no git action when the PR already has every commit", async () => {
