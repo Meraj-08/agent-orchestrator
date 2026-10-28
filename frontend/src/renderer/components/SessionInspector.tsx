@@ -51,6 +51,7 @@ import { AgentAvatar } from "./AgentAvatar";
 import { SessionArtifactsView, type ArtifactOpenRequest } from "./SessionArtifactsView";
 import { OrchestratorChildrenSection } from "./OrchestratorChildrenSection";
 import { ProductExternalLink } from "./ProductExternalLink";
+import { PullRequestDescription } from "./PullRequestDescription";
 import { CopyButton } from "./chat/CopyButton";
 import { ScriptRunPanel } from "./ScriptRunPanel";
 import { useCloudScriptRuns } from "../hooks/useCloudScriptRuns";
@@ -1002,6 +1003,7 @@ export function PRSummaryCard({
 	return (
 		<InspectorPullRequestCardView
 			countNounLabel={(count, noun) => `${count} ${t(prNounKeys[noun], { count })}`}
+			description={<PullRequestDescription cloud={Boolean(cloudOrgId)} pr={pr} />}
 			externalIcon={<ArrowUpRight aria-hidden="true" className="size-icon-2xs shrink-0" strokeWidth={2} />}
 			externalLink={ProductExternalLink}
 			mergeAction={

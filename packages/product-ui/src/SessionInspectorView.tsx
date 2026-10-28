@@ -347,6 +347,7 @@ const prStateTone: Record<InspectorPullRequestState, string> = {
 
 export function InspectorPullRequestCardView({
 	countNounLabel,
+	description,
 	externalIcon,
 	externalLink: ExternalLink,
 	mergeAction,
@@ -358,6 +359,8 @@ export function InspectorPullRequestCardView({
 	statusNotice,
 }: {
 	countNounLabel: CountNounLabel;
+	/** The PR body, shown under the number and state, before the branches. */
+	description?: ReactNode;
 	externalIcon?: ReactNode;
 	externalLink: ExternalLinkComponent;
 	mergeAction?: ReactNode;
@@ -400,6 +403,7 @@ export function InspectorPullRequestCardView({
 					{pr.stateLabel}
 				</span>
 			</div>
+			{description}
 			<PRSummaryMeta
 				className="mt-1.5"
 				countNounLabel={countNounLabel}
