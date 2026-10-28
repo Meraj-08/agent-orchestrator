@@ -6730,6 +6730,8 @@ export interface components {
             baseRef?: string;
             behind: number;
             commits: number;
+            conflicts: boolean;
+            head?: string;
             remoteBranch?: string;
             unpushed: number;
         };

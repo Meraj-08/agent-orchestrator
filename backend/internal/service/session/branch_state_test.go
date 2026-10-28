@@ -44,6 +44,13 @@ func commitFile(t *testing.T, repo, name string) {
 	runGit(t, repo, "commit", "-m", "add "+name)
 }
 
+// headed sets want's Head to dir's checked-out commit.
+func headed(t *testing.T, dir string, want domain.SessionBranchState) domain.SessionBranchState {
+	t.Helper()
+	want.Head = strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	return want
+}
+
 func TestReconcileSessionBranchStateTracksCommitsAndPushes(t *testing.T) {
 	repo := newPushableRepo(t)
 	runGit(t, repo, "checkout", "-b", "feat/x")
@@ -60,6 +67,7 @@ func TestReconcileSessionBranchStateTracksCommitsAndPushes(t *testing.T) {
 		if err := svc.ReconcileSessionBranchState(context.Background(), "ao-1"); err != nil {
 			t.Fatalf("reconcile: %v", err)
 		}
+		want = headed(t, repo, want)
 		if got := st.sessions["ao-1"].BranchState; got == nil || *got != want {
 			t.Fatalf("branch state = %+v, want %+v", got, want)
 		}
@@ -97,7 +105,7 @@ func TestReconcileBranchStatesFollowsTheWorktreeBranch(t *testing.T) {
 	if err := (&Service{store: st}).ReconcileBranchStates(context.Background()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	want := domain.SessionBranchState{Commits: 1, Unpushed: 1, Base: "main", BaseRef: "origin/main"}
+	want := headed(t, worktree, domain.SessionBranchState{Commits: 1, Unpushed: 1, Base: "main", BaseRef: "origin/main"})
 	if got := st.sessions["s1"].BranchState; got == nil || *got != want {
 		t.Fatalf("branch state = %+v, want %+v", got, want)
 	}
@@ -142,7 +150,7 @@ func TestReconcileBranchStatesRunsGitOnlyWhenTipsMove(t *testing.T) {
 	if got := pass(); got != 2 {
 		t.Fatalf("pass after one commit ran %d git processes, want 2", got)
 	}
-	want := domain.SessionBranchState{Commits: 2, Unpushed: 2, Base: "main", BaseRef: "origin/main"}
+	want := headed(t, worktrees["s1"], domain.SessionBranchState{Commits: 2, Unpushed: 2, Base: "main", BaseRef: "origin/main"})
 	if got := st.sessions["s1"].BranchState; got == nil || *got != want {
 		t.Fatalf("s1 branch state = %+v, want %+v", got, want)
 	}
@@ -171,7 +179,36 @@ func TestReconcileSessionBranchStateCountsHowFarBehindTheBase(t *testing.T) {
 	st.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", Metadata: domain.SessionMetadata{
 		WorkspacePath: repo, DiffBaseRef: "refs/remotes/origin/main",
 	}}
-	want := domain.SessionBranchState{Commits: 1, Unpushed: 1, Base: "main", BaseRef: "origin/main", Behind: 2}
+	want := headed(t, repo, domain.SessionBranchState{Commits: 1, Unpushed: 1, Base: "main", BaseRef: "origin/main", Behind: 2})
+	if got := reconcileOne(t, st, "ao-1"); got == nil || *got != want {
+		t.Fatalf("branch state = %+v, want %+v", got, want)
+	}
+}
+
+func TestReconcileSessionBranchStateReportsConflictsWithTheBase(t *testing.T) {
+	repo := newPushableRepo(t)
+	writeWorkspaceFile(t, repo, "shared.go", "package main\n")
+	runGit(t, repo, "add", "shared.go")
+	runGit(t, repo, "commit", "-m", "add shared")
+	runGit(t, repo, "push", "origin", "main")
+	edit := func(content string) {
+		t.Helper()
+		writeWorkspaceFile(t, repo, "shared.go", content)
+		runGit(t, repo, "commit", "-am", "edit shared")
+	}
+	runGit(t, repo, "checkout", "-b", "feat/x")
+	edit("package main\n\nconst side = \"branch\"\n")
+	// main edits the same lines after the split.
+	runGit(t, repo, "checkout", "main")
+	edit("package main\n\nconst side = \"main\"\n")
+	runGit(t, repo, "push", "origin", "main")
+	runGit(t, repo, "checkout", "feat/x")
+
+	st := &branchStateStore{fakeStore: newFakeStore()}
+	st.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", Metadata: domain.SessionMetadata{
+		WorkspacePath: repo, DiffBaseRef: "refs/remotes/origin/main",
+	}}
+	want := headed(t, repo, domain.SessionBranchState{Commits: 1, Unpushed: 1, Base: "main", BaseRef: "origin/main", Behind: 1, Conflicts: true})
 	if got := reconcileOne(t, st, "ao-1"); got == nil || *got != want {
 		t.Fatalf("branch state = %+v, want %+v", got, want)
 	}
@@ -187,7 +224,7 @@ func TestReconcileSessionBranchStateLabelsALocalBase(t *testing.T) {
 	st.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", Metadata: domain.SessionMetadata{
 		WorkspacePath: repo, DiffBaseRef: "refs/heads/main",
 	}}
-	want := domain.SessionBranchState{Commits: 1, Unpushed: 1, Base: "main", BaseRef: "main"}
+	want := headed(t, repo, domain.SessionBranchState{Commits: 1, Unpushed: 1, Base: "main", BaseRef: "main"})
 	if got := reconcileOne(t, st, "ao-1"); got == nil || *got != want {
 		t.Fatalf("branch state = %+v, want %+v", got, want)
 	}
@@ -206,7 +243,7 @@ func TestReconcileSessionBranchStateLeavesBaseUnsetForARecordedCommit(t *testing
 	st.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", Metadata: domain.SessionMetadata{
 		WorkspacePath: repo, DiffBaseSHA: baseSHA,
 	}}
-	want := domain.SessionBranchState{Commits: 1, Unpushed: 1}
+	want := headed(t, repo, domain.SessionBranchState{Commits: 1, Unpushed: 1})
 	if got := reconcileOne(t, st, "ao-1"); got == nil || *got != want {
 		t.Fatalf("branch state = %+v, want %+v", got, want)
 	}

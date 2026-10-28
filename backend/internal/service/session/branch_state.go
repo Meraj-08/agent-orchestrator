@@ -148,7 +148,7 @@ func (s *Service) reconcileBranchTarget(ctx context.Context, writer branchStateW
 	}
 
 	root := rec.Metadata.WorkspacePath
-	var state domain.SessionBranchState
+	state := domain.SessionBranchState{Head: local}
 	switch {
 	case base != "" && baseRef != "":
 		// One call counts both sides, so reading how far behind the base the
@@ -160,6 +160,14 @@ func (s *Service) reconcileBranchTarget(ctx context.Context, writer branchStateW
 		}
 		state.Commits, state.Behind = ahead, behind
 		state.Base, state.BaseRef = branchBaseNames(baseRef)
+		// Both sides must have moved since they split for a merge to conflict.
+		// merge-tree needs git 2.38; an older git leaves conflicts unreported
+		// rather than dropping the other facts. The tips fingerprint above keeps
+		// this to one in-memory merge per new commit on either side.
+		if ahead > 0 && behind > 0 {
+			files, ok := gitMergeConflictFiles(ctx, root, base, local)
+			state.Conflicts = ok && len(files) > 0
+		}
 	case base != "":
 		// Only a recorded commit: there is no base branch to be behind.
 		commits, ok := gitRevListCount(ctx, root, base+".."+local)

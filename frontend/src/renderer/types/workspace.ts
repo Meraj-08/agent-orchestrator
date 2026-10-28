@@ -106,6 +106,10 @@ export type SessionBranchState = {
 	baseRef?: string;
 	/** Commits on base the branch does not have. Only meaningful when base is set. */
 	behind: number;
+	/** Merging into base would conflict, read locally. Absent from daemons that predate it. */
+	conflicts?: boolean;
+	/** The branch's tip commit. */
+	head?: string;
 };
 
 /** The session's current launch still runs a harness release an update has replaced. */

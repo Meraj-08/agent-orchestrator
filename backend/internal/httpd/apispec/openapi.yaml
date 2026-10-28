@@ -19194,6 +19194,10 @@ components:
           type: integer
         commits:
           type: integer
+        conflicts:
+          type: boolean
+        head:
+          type: string
         remoteBranch:
           type: string
         unpushed:
@@ -19202,6 +19206,7 @@ components:
       - commits
       - unpushed
       - behind
+      - conflicts
       type: object
     SessionHistoryResponse:
       properties:

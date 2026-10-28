@@ -4722,9 +4722,11 @@ describe("SessionInspector branch summary", () => {
   function mockGitState({
     uncommitted = [],
     committed = [],
-  }: { uncommitted?: ChangedFile[]; committed?: ChangedFile[] }) {
+    prs,
+  }: { uncommitted?: ChangedFile[]; committed?: ChangedFile[]; prs?: SessionPRSummary[] }) {
     const respond = commonGetsResponder();
     getMock.mockImplementation(async (path: string) => {
+      if (prs && path === "/api/v1/sessions/{sessionId}/pr") return { data: { prs, linkedPrs: [] }, error: undefined };
       if (path === "/api/v1/sessions/{sessionId}/workspace/manifest") {
         return {
           data: {
@@ -4796,7 +4798,7 @@ describe("SessionInspector branch summary", () => {
     useSessionGitActionStore.setState({ pending: {} });
   });
 
-  it("shows uncommitted work and commits, pushes, and opens a PR in one step", async () => {
+  it("leads uncommitted work with Commit & push and offers no PR yet", async () => {
     mockGitState({ uncommitted: [changedFile("src/a.ts", 10, 2), changedFile("src/b.ts", 3, 1)] });
     renderWithQuery(<SessionInspector session={session([])} />);
 
@@ -4806,14 +4808,15 @@ describe("SessionInspector branch summary", () => {
     expect(branch().getByText("+13")).toBeInTheDocument();
     expect(within(screen.getByRole("tab", { name: "Files" })).getByText("2")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "Commit & create PR" }));
+    expect(screen.queryByRole("button", { name: /Create PR/ })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Commit & push" }));
 
     await waitFor(() => expect(sendCalls()).toHaveLength(1));
     expect(sendCalls()[0][1]).toEqual({
       params: { path: { sessionId: "sess-1" } },
-      body: { message: expect.stringContaining("open a pull request against `main`") },
+      body: { message: "Commit all uncommitted changes with a clear message and push this branch." },
     });
-    expect(await screen.findByRole("button", { name: "Creating PR…" })).toBeDisabled();
+    expect(await screen.findByRole("button", { name: "Committing and pushing…" })).toBeDisabled();
     expect(screen.queryByText(/agent/i)).not.toBeInTheDocument();
   });
 
@@ -4826,21 +4829,19 @@ describe("SessionInspector branch summary", () => {
     expect(screen.getByRole("tab", { name: "Files" })).toHaveAttribute("aria-selected", "true");
   });
 
-  it("offers push before a PR when commits never left this machine", async () => {
+  it("offers only Push while commits never left this machine", async () => {
     mockGitState({ committed: [changedFile("src/a.ts", 5, 0)] });
     renderWithQuery(<SessionInspector session={session([], { branchState: { behind: 0, commits: 2, unpushed: 2 } })} />);
 
     expect(await screen.findByText("2 commits")).toBeInTheDocument();
     expect(screen.getByText("not pushed")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Push & create PR" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "More git actions" })).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "More git actions" }));
-    expect(await screen.findByRole("menuitem", { name: "Push" })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("menuitem", { name: "Create draft PR" }));
+    await userEvent.click(screen.getByRole("button", { name: "Push" }));
 
     await waitFor(() => expect(sendCalls()).toHaveLength(1));
-    expect(sendCalls()[0][1].body.message).toContain("open a draft pull request");
-    expect(await screen.findByRole("button", { name: "Creating PR…" })).toBeDisabled();
+    expect(sendCalls()[0][1].body.message).toBe("Push this branch.");
+    expect(await screen.findByRole("button", { name: "Pushing…" })).toBeDisabled();
   });
 
   it("offers a plain Create PR once every commit is pushed", async () => {
@@ -4849,6 +4850,50 @@ describe("SessionInspector branch summary", () => {
 
     expect(await screen.findByText("pushed")).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: "Create PR" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "More git actions" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Create draft PR" }));
+    await waitFor(() => expect(sendCalls()).toHaveLength(1));
+    expect(sendCalls()[0][1].body.message).toContain("open a draft pull request against `main`");
+  });
+
+  it("offers no Create PR when the branch tip already shipped in a merged PR", async () => {
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [prSummary(7, "merged")] });
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "merged")], { branchState: { ...pushed(2), head: "sha-7" } })} />,
+      undefined,
+      (client) => seedPRSummaries(client, [prSummary(7, "merged")]),
+    );
+
+    expect(await screen.findByText("pushed")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create PR" })).not.toBeInTheDocument();
+  });
+
+  it("brings Create PR back once new commits move the tip past the merged PR", async () => {
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [prSummary(7, "merged")] });
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "merged")], { branchState: { ...pushed(3), head: "sha-new" } })} />,
+      undefined,
+      (client) => seedPRSummaries(client, [prSummary(7, "merged")]),
+    );
+
+    expect(await screen.findByRole("button", { name: "Create PR" })).toBeInTheDocument();
+  });
+
+  it("shows how far behind the base the branch is and flags conflicts", async () => {
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)] });
+    renderWithQuery(<SessionInspector session={session([], { branchState: { ...pushed(2), base: "main", behind: 3, conflicts: true } })} />);
+
+    expect(await branch().findByText("3 commits behind main")).toBeInTheDocument();
+    expect(branch().getByText("conflicts")).toBeInTheDocument();
+  });
+
+  it("shows no behind row while the branch is up to date", async () => {
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)] });
+    renderWithQuery(<SessionInspector session={session([], { branchState: pushed(2) })} />);
+
+    expect(await screen.findByText("pushed")).toBeInTheDocument();
+    expect(screen.queryByText(/behind main/)).not.toBeInTheDocument();
   });
 
   it("commits without pushing from the menu", async () => {
@@ -4889,16 +4934,16 @@ describe("SessionInspector branch summary", () => {
   });
 
   it("leaves the loading state once the PR appears", async () => {
-    mockGitState({ uncommitted: [changedFile("src/a.ts", 1, 0)] });
-    const { queryClient, rerender } = renderWithQuery(<SessionInspector session={session([])} />);
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)] });
+    const { queryClient, rerender } = renderWithQuery(<SessionInspector session={session([], { branchState: pushed(2) })} />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Commit & create PR" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Create PR" }));
     expect(await screen.findByRole("button", { name: "Creating PR…" })).toBeInTheDocument();
 
     rerender(
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
-          <SessionInspector session={session([pr(7, "open")])} />
+          <SessionInspector session={session([pr(7, "open")], { branchState: pushed(2) })} />
         </TooltipProvider>
       </QueryClientProvider>,
     );
@@ -4938,9 +4983,9 @@ describe("SessionInspector branch summary", () => {
     );
     renderWithQuery(<SessionInspector session={session([])} />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Commit & create PR" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Commit & push" }));
 
     expect(await screen.findByText("Session is terminated")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Commit & create PR" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Commit & push" })).toBeEnabled();
   });
 });

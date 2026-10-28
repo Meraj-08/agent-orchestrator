@@ -422,6 +422,12 @@ type SessionBranchState struct {
 	// Behind is how many commits Base has that the branch does not. Only
 	// meaningful when Base is set.
 	Behind int `json:"behind"`
+	// Head is the branch's tip commit, so a client can tell work that already
+	// shipped in a merged PR from new work.
+	Head string `json:"head,omitempty"`
+	// Conflicts reports that merging the branch into Base would conflict, read
+	// locally before any provider says so. False also covers "could not tell".
+	Conflicts bool `json:"conflicts"`
 }
 
 // SessionProvisionStepID names one stage of an asynchronous Chat start.
