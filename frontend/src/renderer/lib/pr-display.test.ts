@@ -420,6 +420,63 @@ describe("prCardPresentation", () => {
 	});
 });
 
+describe("merge readiness rows", () => {
+	const labels = (pr: SessionPRSummary) => prCardPresentation(pr).readinessRows?.map((row) => row.label);
+	const reviewEntry = (reviewerId: string, verdict: "approved" | "changes_requested", submittedAt = "2026-06-15T00:00:00Z") => ({
+		autoInjectReview: false,
+		reviewerId,
+		submittedAt,
+		verdict,
+	});
+
+	it("always shows conflicts, checks and review, saying no reviews yet instead of no review required", () => {
+		const pr = summary({ review: { decision: "none", hasUnresolvedHumanComments: false, unresolvedBy: [] } });
+		expect(labels(pr)).toEqual(["No conflicts", "Checks passing", "No reviews yet"]);
+		expect(prCardPresentation(pr).readinessRows?.[2]).toMatchObject({ tone: "passive" });
+	});
+
+	it("says what is still unknown while GitHub is computing", () => {
+		const pr = summary({
+			ci: { autoInjectCI: true, state: "unknown", failingChecks: [], checks: [] },
+			mergeability: { state: "unknown", reasons: [], prUrl: "https://github.com/acme/repo/pull/7" },
+			review: { decision: "review_required", hasUnresolvedHumanComments: false, unresolvedBy: [] },
+		});
+		expect(labels(pr)).toEqual(["Conflicts unknown", "Checks unknown", "Review required"]);
+		expect(prCardPresentation(pr).readinessRows?.[1]).toMatchObject({ href: "https://github.com/acme/repo/pull/7/checks" });
+	});
+
+	it("names reviewers by their newest verdict", () => {
+		const pr = summary({
+			review: {
+				decision: "changes_requested",
+				hasUnresolvedHumanComments: false,
+				unresolvedBy: [],
+				reviews: [reviewEntry("ada", "changes_requested", "2026-06-14T00:00:00Z"), reviewEntry("ada", "approved"), reviewEntry("lin", "changes_requested")],
+			},
+		});
+		expect(labels(pr)).toEqual(["No conflicts", "Checks passing", "Changes requested by lin"]);
+	});
+
+	it("keeps a voluntary review when no review is required", () => {
+		const pr = summary({
+			review: { decision: "none", hasUnresolvedHumanComments: false, unresolvedBy: [], reviews: [reviewEntry("ada", "approved")] },
+		});
+		expect(labels(pr)?.at(-1)).toBe("Approved by ada");
+	});
+
+	it("shows unresolved comments, which still block the merge without a review rule", () => {
+		const pr = summary({
+			review: { decision: "none", hasUnresolvedHumanComments: true, unresolvedBy: [{ count: 2, links: [], reviewerId: "ada" }] },
+		});
+		expect(prCardPresentation(pr).readinessRows?.at(-1)).toMatchObject({ label: "2 unresolved comments", tone: "warning" });
+	});
+
+	it("shows a merge conflict in the conflicts row", () => {
+		const pr = summary({ mergeability: { state: "conflicting", reasons: [], prUrl: "https://github.com/acme/repo/pull/7" } });
+		expect(prCardPresentation(pr).readinessRows?.[0]).toMatchObject({ label: "Merge conflict", tone: "error" });
+	});
+});
+
 describe("prBrowserUrl", () => {
 	it("normalizes issue-shaped GitHub PR URLs to the pull request page", () => {
 		expect(

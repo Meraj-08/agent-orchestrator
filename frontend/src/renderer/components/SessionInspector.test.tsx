@@ -591,6 +591,12 @@ describe("SessionInspector PR section", () => {
         .getByText(title)
         .closest("[data-testid='inspector-section']") as HTMLElement,
     );
+  // The card shows only the merge-readiness line; its status rows open on click.
+  const openReadiness = () => {
+    for (const toggle of document.querySelectorAll<HTMLElement>("article button[aria-expanded='false'][title]")) {
+      fireEvent.click(toggle);
+    }
+  };
 
   it("shows a reported external PR from one SCM request without tracked actions", async () => {
     const respond = commonGetsResponder();
@@ -684,7 +690,9 @@ describe("SessionInspector PR section", () => {
     expect(
       prSection("Pull request").getByText("Mergeable"),
     ).toBeInTheDocument();
-    expect(prSection("Pull request").getByText("PR approved")).toBeInTheDocument();
+    openReadiness();
+    expect(prSection("Pull request").getByText("No conflicts")).toBeInTheDocument();
+    expect(prSection("Pull request").getByText("Approved")).toBeInTheDocument();
     expect(
       prSection("Pull request").getByText("Checks passing"),
     ).toBeInTheDocument();
@@ -860,7 +868,12 @@ describe("SessionInspector PR section", () => {
     );
 
     expect(screen.getByRole("button", { name: "Merge PR #7" })).toBeEnabled();
-    expect(prSection("Pull request").getByText("No review required")).toBeInTheDocument();
+    openReadiness();
+    // With no review rule the row says what happened on the PR, not what the repo requires.
+    expect(prSection("Pull request").getByText("No conflicts")).toBeInTheDocument();
+    expect(prSection("Pull request").getByText("Checks passing")).toBeInTheDocument();
+    expect(prSection("Pull request").getByText("No reviews yet")).toBeInTheDocument();
+    expect(prSection("Pull request").queryByText("No review required")).not.toBeInTheDocument();
     expect(prSection("Pull request").queryByText("Review pending")).not.toBeInTheDocument();
   });
 
@@ -1090,6 +1103,7 @@ describe("SessionInspector PR section", () => {
     const card = prSection("Pull request")
       .getByText("PR #7")
       .closest("article") as HTMLElement;
+    openReadiness();
     expect(within(card).getByText("Checks failing")).toBeInTheDocument();
     expect(within(card).queryByText("CI failures not injected")).not.toBeInTheDocument();
   });

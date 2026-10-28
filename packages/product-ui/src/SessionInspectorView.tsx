@@ -416,6 +416,7 @@ export function InspectorPullRequestCardView({
 					<PRCardStatusSummary
 						action={mergeAction}
 						className="mt-2"
+						collapsibleReadiness
 						externalLink={ExternalLink}
 						presentation={pr.card}
 						reviewDetailsAction={pr.reviewDetailsAction}
