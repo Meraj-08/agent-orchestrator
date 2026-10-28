@@ -120,8 +120,17 @@ export function sessionPRDisplaySummaries(
 	return [...fromFactsMap.values(), ...summaryOnly].sort(comparePRDisplaySummaries);
 }
 
+// The view-only PR fields (labels, requested reviewers, commits) for a summary
+// no provider details were observed for: AO Cloud summaries, a PR known only
+// from session facts, and fixtures. detailsObservedAt stays absent, so a view
+// can tell "not loaded" from "this PR has none".
+export function noPRDetails(): Pick<SessionPRSummary, "labels" | "requestedReviewers" | "commits" | "commitCount"> {
+	return { labels: [], requestedReviewers: [], commits: [], commitCount: 0 };
+}
+
 function sessionPRFactToSummary(session: WorkspaceSession, pr: PullRequestFacts): SessionPRSummary {
 	return {
+		...noPRDetails(),
 		url: pr.url,
 		htmlUrl: pr.url,
 		number: pr.number,
@@ -140,6 +149,8 @@ function sessionPRFactToSummary(session: WorkspaceSession, pr: PullRequestFacts)
 			autoInjectCI: true,
 			state: toCIState(pr.ci),
 			failingChecks: pr.failingChecks ?? [],
+			// Only the daemon's summary lists every check; session facts know the failing ones.
+			checks: [],
 		},
 		review: {
 			decision: toReviewDecision(pr.review),

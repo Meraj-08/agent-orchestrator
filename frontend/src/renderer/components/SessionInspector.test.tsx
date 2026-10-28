@@ -30,6 +30,7 @@ import type {
   WorkspaceSummary,
 } from "../types/workspace";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
+import { noPRDetails } from "../lib/pr-display";
 
 const { cloudCpMock, getMock, navigateMock, patchMock, putMock, postMock } = vi.hoisted(
   () => ({
@@ -163,6 +164,7 @@ const prSummary = (
 ): SessionPRSummary => {
   const url = `https://github.com/acme/repo/pull/${number}`;
   return {
+    ...noPRDetails(),
     url: `https://api.github.com/repos/acme/repo/pulls/${number}`,
     htmlUrl: url,
     number,
@@ -177,7 +179,7 @@ const prSummary = (
     additions: 4,
     deletions: 1,
     changedFiles: 2,
-    ci: { autoInjectCI: true, state: "passing", failingChecks: [] },
+    ci: { autoInjectCI: true, state: "passing", failingChecks: [], checks: [] },
     review: {
       decision: "none",
       hasUnresolvedHumanComments: false,
@@ -819,7 +821,7 @@ describe("SessionInspector PR section", () => {
         (client) => {
           seedPRSummaries(client, [
             prSummary(7, "open", {
-              ci: { autoInjectCI: true, state: "passing", failingChecks: [] },
+              ci: { autoInjectCI: true, state: "passing", failingChecks: [], checks: [] },
               review: { decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [] },
               mergeability: { state: mergeability, reasons: [], prUrl: "https://example.com/pr/7" },
             }),
@@ -838,7 +840,7 @@ describe("SessionInspector PR section", () => {
         seedPRSummaries(client, [
           prSummary(7, "open", {
             headSha: "",
-            ci: { autoInjectCI: true, state: "passing", failingChecks: [] },
+            ci: { autoInjectCI: true, state: "passing", failingChecks: [], checks: [] },
             review: { decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [] },
             mergeability: { state: "mergeable", reasons: [], prUrl: "https://example.com/pr/7" },
           }),
@@ -1061,6 +1063,7 @@ describe("SessionInspector PR section", () => {
       ci: {
         autoInjectCI: false,
         state: "failing",
+        checks: [],
         failingChecks: [
           {
             name: "unit",
@@ -4728,7 +4731,7 @@ describe("SessionInspector branch summary", () => {
       return respond(path);
     });
   }
-  const pushed = (commits: number) => ({ commits, remoteBranch: "origin/feat/ns", unpushed: 0 });
+  const pushed = (commits: number) => ({ behind: 0, commits, remoteBranch: "origin/feat/ns", unpushed: 0 });
 
   const sendCalls = () => postCallsFor("/api/v1/sessions/{sessionId}/send");
   const branch = () => within(screen.getByRole("region", { name: "Branch" }));
@@ -4811,7 +4814,7 @@ describe("SessionInspector branch summary", () => {
 
   it("offers push before a PR when commits never left this machine", async () => {
     mockGitState({ committed: [changedFile("src/a.ts", 5, 0)] });
-    renderWithQuery(<SessionInspector session={session([], { branchState: { commits: 2, unpushed: 2 } })} />);
+    renderWithQuery(<SessionInspector session={session([], { branchState: { behind: 0, commits: 2, unpushed: 2 } })} />);
 
     expect(await screen.findByText("2 commits")).toBeInTheDocument();
     expect(screen.getByText("not pushed")).toBeInTheDocument();
@@ -4893,7 +4896,7 @@ describe("SessionInspector branch summary", () => {
   it("finishes Pushing when the daemon reports the branch pushed", async () => {
     mockGitState({ committed: [changedFile("src/a.ts", 5, 0)] });
     const { queryClient, rerender } = renderWithQuery(
-      <SessionInspector session={session([pr(7, "open")], { branchState: { commits: 3, remoteBranch: "origin/feat/ns", unpushed: 1 } })} />,
+      <SessionInspector session={session([pr(7, "open")], { branchState: { behind: 0, commits: 3, remoteBranch: "origin/feat/ns", unpushed: 1 } })} />,
     );
 
     expect(await screen.findByText("1 not pushed")).toBeInTheDocument();

@@ -413,6 +413,15 @@ type SessionBranchState struct {
 	// Unpushed is how many branch commits are not on RemoteBranch. It equals
 	// Commits while RemoteBranch is empty.
 	Unpushed int `json:"unpushed"`
+	// Base is the short name of the branch Commits and Behind are counted
+	// against, such as "main". Empty when the base is known only as a commit,
+	// in which case Behind is not known.
+	Base string `json:"base,omitempty"`
+	// BaseRef is the exact ref that was read for Base, such as "origin/main".
+	BaseRef string `json:"baseRef,omitempty"`
+	// Behind is how many commits Base has that the branch does not. Only
+	// meaningful when Base is set.
+	Behind int `json:"behind"`
 }
 
 // SessionProvisionStepID names one stage of an asynchronous Chat start.
