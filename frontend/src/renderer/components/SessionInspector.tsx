@@ -463,15 +463,7 @@ const SummaryView = memo(function SummaryView({
 			}
 			activityTitle={t("inspector.activity")}
 			artifactCards={
-				hasArtifacts ? (
-					artifacts.map((artifact) => (
-						<ArtifactSummaryCard
-							artifact={artifact}
-							key={artifact.path}
-							onOpenArtifact={onOpenArtifact}
-						/>
-					))
-				) : undefined
+				hasArtifacts ? <ArtifactSummaryList artifacts={artifacts} onOpenArtifact={onOpenArtifact} /> : undefined
 			}
 			artifactTitle={hasArtifacts ? artifactSectionTitle : undefined}
 			branch={
@@ -1067,6 +1059,62 @@ export function PRSummaryCard({
 			pr={viewModel}
 			pullRequestIcon={<GitPullRequest className="size-icon-sm shrink-0" aria-hidden="true" />}
 		/>
+	);
+}
+
+const ARTIFACT_PREVIEW_COUNT = 4;
+
+/** The newest artifacts first, capped until the person asks for the rest. */
+function ArtifactSummaryList({
+	artifacts,
+	onOpenArtifact,
+}: {
+	artifacts: SessionArtifact[];
+	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
+}) {
+	const { t } = useTranslation();
+	const [expanded, setExpanded] = useState(false);
+	const reduceMotion = useReducedMotion();
+	const newestFirst = [...artifacts].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+	const hidden = newestFirst.length - ARTIFACT_PREVIEW_COUNT;
+	return (
+		<>
+			{newestFirst.slice(0, ARTIFACT_PREVIEW_COUNT).map((artifact) => (
+				<ArtifactSummaryCard artifact={artifact} key={artifact.path} onOpenArtifact={onOpenArtifact} />
+			))}
+			<AnimatePresence initial={false}>
+				{expanded && hidden > 0 ? (
+					// -mt cancels the list's gap while collapsed; the inner pt restores it once open.
+					<motion.div
+						animate={{ height: "auto", opacity: 1, transitionEnd: { overflow: "visible" } }}
+						className="-mt-1.5"
+						exit={{ height: 0, opacity: 0, overflow: "hidden" }}
+						initial={{ height: 0, opacity: 0, overflow: "hidden" }}
+						transition={reduceMotion ? { duration: 0 } : { duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
+					>
+						<div className="flex flex-col gap-1.5 pt-1.5">
+							{newestFirst.slice(ARTIFACT_PREVIEW_COUNT).map((artifact) => (
+								<ArtifactSummaryCard artifact={artifact} key={artifact.path} onOpenArtifact={onOpenArtifact} />
+							))}
+						</div>
+					</motion.div>
+				) : null}
+			</AnimatePresence>
+			{hidden > 0 ? (
+				<Button
+					aria-expanded={expanded}
+					// A faint resting fill: present, but quieter than the rows above it.
+					className="h-control-sm gap-1 self-start bg-interactive-hover px-2.5 text-xs text-muted-foreground hover:bg-interactive-active hover:text-foreground dark:hover:bg-interactive-active focus-visible:ring-2 focus-visible:ring-ring/60"
+					onClick={() => setExpanded((open) => !open)}
+					size="none"
+					type="button"
+					variant="ghost"
+				>
+					{expanded ? t("inspector.showLess") : t("inspector.showMore")}
+					<ChevronRight aria-hidden="true" className={cn("size-icon-sm transition-transform motion-reduce:transition-none", expanded ? "-rotate-90" : "rotate-90")} />
+				</Button>
+			) : null}
+		</>
 	);
 }
 

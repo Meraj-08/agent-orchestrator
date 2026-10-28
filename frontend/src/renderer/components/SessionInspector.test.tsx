@@ -1152,6 +1152,38 @@ describe("SessionInspector Artifacts section", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("lists the four newest artifacts first and reveals the rest on Show more", async () => {
+    const at = (day: number) => `2026-06-${String(day).padStart(2, "0")}T00:00:00Z`;
+    renderWithQuery(
+      <SessionInspector
+        session={session([], {
+          outputType: "artifact",
+          artifactFiles: [1, 6, 3, 5, 2, 4].map((day) => artifact({ path: `day-${day}.md`, kind: "markdown", updatedAt: at(day) })),
+        })}
+      />,
+    );
+
+    const names = () => screen.getAllByText(/^day-\d\.md$/).map((element) => element.textContent);
+    expect(screen.getByText("Artifacts (6)")).toBeInTheDocument();
+    expect(names()).toEqual(["day-6.md", "day-5.md", "day-4.md", "day-3.md"]);
+
+    await userEvent.click(screen.getByRole("button", { name: "Show more" }));
+
+    await waitFor(() => expect(names()).toEqual(["day-6.md", "day-5.md", "day-4.md", "day-3.md", "day-2.md", "day-1.md"]));
+    expect(screen.getByRole("button", { name: "Show less" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("shows no Show more for four artifacts or fewer", () => {
+    renderWithQuery(
+      <SessionInspector
+        session={session([], { outputType: "artifact", artifactFiles: [1, 2, 3, 4].map((day) => artifact({ path: `day-${day}.md` })) })}
+      />,
+    );
+
+    expect(screen.getByText("day-4.md")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
+  });
+
   it("does not show artifacts for a plain PR session with no artifact files", () => {
     renderWithQuery(<SessionInspector session={session([pr(7, "open")], { outputType: "pr" })} />);
 
