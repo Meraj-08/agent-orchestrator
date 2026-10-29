@@ -147,3 +147,66 @@ func TestWindowsProviderJobReapsGrandchild(t *testing.T) {
 		})
 	}
 }
+
+// Shutdown polls host.json while the exiting host deletes it. Each must still
+// succeed while the other holds the file, or the descriptor outlives its host
+// (Shutdown waits out its deadline) or the poll fails with a sharing violation.
+func TestWindowsHostDescriptorReadAndRemovalDoNotBlockEachOther(t *testing.T) {
+	dataDir := t.TempDir()
+	d := Descriptor{Version: ProtocolVersion, SessionID: "busy", Address: "127.0.0.1:1", Token: "token", PID: os.Getpid()}
+	if err := writeDescriptor(dataDir, d); err != nil {
+		t.Fatal(err)
+	}
+	path, _ := descriptorPath(dataDir, d.SessionID)
+
+	// A reader that denies deletion, as os.Open does, makes the host's delete fail.
+	plain, err := os.Open(path) //nolint:gosec // Test-owned temp path.
+	if err != nil {
+		t.Fatal(err)
+	}
+	removeErr := os.Remove(path)
+	_ = plain.Close()
+	if !errors.Is(removeErr, windows.ERROR_SHARING_VIOLATION) {
+		t.Fatalf("Remove under an os.Open reader = %v, want a sharing violation", removeErr)
+	}
+
+	reader, err := openHostFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removeErr = os.Remove(path)
+	_ = reader.Close()
+	if removeErr != nil {
+		t.Fatalf("Remove under a host-file reader: %v", removeErr)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("host.json after Remove: %v, want it gone", err)
+	}
+
+	// A handle opened for deletion, as DeleteFile and MoveFileEx hold one,
+	// denies an os.Open reader but not readDescriptor.
+	if err := writeDescriptor(dataDir, d); err != nil {
+		t.Fatal(err)
+	}
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleting, err := windows.CreateFile(name, windows.DELETE,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = windows.CloseHandle(deleting) }()
+	if plain, err := os.Open(path); err == nil { //nolint:gosec // Test-owned temp path.
+		_ = plain.Close()
+		t.Fatal("os.Open under a delete handle succeeded, want a sharing violation")
+	} else if !errors.Is(err, windows.ERROR_SHARING_VIOLATION) || !hostFileBusy(err) {
+		t.Fatalf("os.Open under a delete handle = %v, want a busy sharing violation", err)
+	}
+	got, err := readDescriptor(dataDir, d.SessionID)
+	if err != nil || got.Token != d.Token {
+		t.Fatalf("readDescriptor under a delete handle = (%+v, %v), want the descriptor", got, err)
+	}
+}

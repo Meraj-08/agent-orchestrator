@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"syscall"
@@ -114,3 +115,30 @@ func killProviderProcess(ctx context.Context, cmd *exec.Cmd) error {
 // terminateProviderProcess has no graceful equivalent on Windows; the stop
 // deadline's kill reaps the job.
 func terminateProviderProcess(*exec.Cmd) error { return nil }
+
+// openHostFile opens a chat host file for reading without denying deletion.
+// os.Open omits FILE_SHARE_DELETE, so while Shutdown polls host.json the
+// exiting host's DeleteFile fails with a sharing violation (and host.json then
+// outlives its host), and a poll that lands while that delete holds the file
+// fails the same way.
+func openHostFile(path string) (*os.File, error) {
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	handle, err := windows.CreateFile(name, windows.GENERIC_READ,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	return os.NewFile(uintptr(handle), path), nil
+}
+
+// hostFileBusy reports a host file another handle still holds: a sharing
+// violation, or access denied while a delete is pending until that handle
+// closes. Either clears without any action from the reader.
+func hostFileBusy(err error) bool {
+	return errors.Is(err, windows.ERROR_SHARING_VIOLATION) ||
+		errors.Is(err, windows.ERROR_ACCESS_DENIED)
+}
