@@ -1014,8 +1014,7 @@ describe("SessionInspector PR section", () => {
     expect(
       screen.queryByRole("switch", { name: "Automatically fix review comments" }),
     ).not.toBeInTheDocument();
-    await openReviewOptions();
-    expect(screen.getByRole("menuitemcheckbox", { name: /Auto review/ })).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Auto review" })).toBeInTheDocument();
 
   });
 
@@ -2108,12 +2107,6 @@ describe("SessionInspector Activity section", () => {
   });
 });
 
-/** Opens the Reviews toolbar's ⋮ menu (auto review, open and archive reviewer). */
-async function openReviewOptions() {
-  await userEvent.click(await screen.findByRole("button", { name: "More review options" }));
-  return screen.findByRole("menu");
-}
-
 /** Expands every PR group, then every reviewer's latest pass, in the Reviews tab. */
 async function expandReviewRows() {
   const groups = await screen.findAllByTestId("review-pr-row").catch(() => []);
@@ -2462,8 +2455,7 @@ describe("SessionInspector summary reviews", () => {
     expect(
       screen.getByRole("button", { name: "Select reviewer agent" }),
     ).toBeDisabled();
-    await openReviewOptions();
-    const toggle = screen.getByRole("menuitemcheckbox", { name: /Auto review/ });
+    const toggle = screen.getByRole("switch", { name: "Auto review" });
     expect(toggle).toHaveAttribute("aria-checked", "true");
     await userEvent.click(toggle);
     await waitFor(() =>
@@ -2485,8 +2477,7 @@ describe("SessionInspector summary reviews", () => {
     renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
     await openReviewsSection();
 
-    await openReviewOptions();
-    const toggle = screen.getByRole("menuitemcheckbox", { name: /Auto review/ });
+    const toggle = screen.getByRole("switch", { name: "Auto review" });
     expect(toggle).toHaveAttribute("aria-checked", "false");
     await userEvent.click(toggle);
     await waitFor(() =>
@@ -2510,9 +2501,8 @@ describe("SessionInspector summary reviews", () => {
     const { queryClient } = renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
     const invalidate = vi.spyOn(queryClient, "invalidateQueries");
     await openReviewsSection();
-    await openReviewOptions();
-    const stop = screen.getByRole("menuitem", { name: "Archive reviewer" });
-    expect(stop).not.toHaveAttribute("aria-disabled");
+    const stop = await screen.findByRole("button", { name: "Archive reviewer" });
+    expect(stop).toBeEnabled();
     await userEvent.click(stop);
     await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/reviews/kill", { params: { path: { sessionId: "sess-1" } } }));
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "review-1"] }));
@@ -2524,11 +2514,7 @@ describe("SessionInspector summary reviews", () => {
     mockCommonGets([], "", []);
     renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
     await openReviewsSection();
-    await openReviewOptions();
-    const archive = screen.getByRole("menuitem", { name: /Archive reviewer/ });
-    expect(archive).toHaveAttribute("aria-disabled", "true");
-    // A disabled item says why.
-    expect(archive).toHaveTextContent("No reviewer session yet");
+    expect(screen.getByRole("button", { name: "Archive reviewer" })).toBeDisabled();
   });
 
   it("removes the archived Chat surface while the reviews refresh is pending", async () => {
@@ -2545,8 +2531,7 @@ describe("SessionInspector summary reviews", () => {
     postMock.mockImplementation(async () => { stopped = true; return { data: { reviewerHandleId: "", reviews } }; });
     const { queryClient } = renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
     await openReviewsSection();
-    await openReviewOptions();
-    await userEvent.click(screen.getByRole("menuitem", { name: "Archive reviewer" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Archive reviewer" }));
     await waitFor(() => expect(queryClient.getQueryState(["session-reviews", "sess-1"])?.fetchStatus).toBe("fetching"));
     await waitFor(() => expect(queryClient.getQueryData<{ reviewerSurface: unknown }>(["session-reviews", "sess-1"])?.reviewerSurface).toBeUndefined());
     expect(stopped).toBe(true);
@@ -2614,8 +2599,7 @@ describe("SessionInspector summary reviews", () => {
     expect(
       screen.queryByRole("button", { name: "Run review" }),
     ).not.toBeInTheDocument();
-    await openReviewOptions();
-    expect(screen.getByRole("menuitem", { name: "Archive reviewer" })).not.toHaveAttribute("aria-disabled");
+    expect(screen.getByRole("button", { name: "Archive reviewer" })).toBeEnabled();
   });
 
   it("hides review summary sections when no review data exists", async () => {
@@ -2831,9 +2815,8 @@ describe("SessionInspector summary reviews", () => {
     );
     await openReviewsSection();
 
-    await openReviewOptions();
-    expect(screen.getByRole("menuitem", { name: /Open Claude Code reviewer/ })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("menuitem", { name: /Open Codex reviewer/ }));
+    expect(await screen.findByRole("button", { name: "Open Claude Code reviewer" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Open Codex reviewer" }));
     expect(onOpenReviewerTerminal).toHaveBeenCalledWith({ handleId: "codex-pane", harness: "codex" });
   });
 
@@ -2857,9 +2840,8 @@ describe("SessionInspector summary reviews", () => {
     await openReviewsSection();
 
     await screen.findByTestId("review-run-summary");
-    await openReviewOptions();
-    expect(screen.getAllByRole("menuitem", { name: /^Open .* reviewer/ })).toHaveLength(1);
-    expect(screen.getByRole("menuitem", { name: /Open Claude Code reviewer/ })).toBeInTheDocument();
+    // Like main: the selected reviewer is the only live one, so no extra row.
+    expect(screen.queryByRole("button", { name: /^Open .* reviewer/ })).not.toBeInTheDocument();
   });
 
   // An agent can ask a reviewer other than the selected one. The selected
@@ -2888,8 +2870,7 @@ describe("SessionInspector summary reviews", () => {
     );
     await openReviewsSection();
 
-    await openReviewOptions();
-    await userEvent.click(screen.getByRole("menuitem", { name: /Open Codex reviewer/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "Open Codex reviewer" }));
     expect(onOpenReviewerTerminal).toHaveBeenCalledWith({ handleId: "codex-pane", harness: "codex" });
   });
 
@@ -4638,14 +4619,12 @@ describe("SessionInspector Cloud reviews", () => {
     );
 
     await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
-    await openReviewOptions();
-    const autoReview = screen.getByRole("menuitemcheckbox", { name: /Auto review/ });
+    const autoReview = await screen.findByRole("switch", { name: "Auto review" });
     expect(autoReview).toHaveAttribute("aria-checked", "false");
 
     await userEvent.click(autoReview);
 
-    await openReviewOptions();
-    expect(screen.getByRole("menuitemcheckbox", { name: /Auto review/ })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("switch", { name: "Auto review" })).toHaveAttribute("aria-checked", "true");
     expect(cloudCpMock.updateSessionPreferences).toHaveBeenCalledWith(
       "org-1",
       "sess-1",
@@ -4654,7 +4633,7 @@ describe("SessionInspector Cloud reviews", () => {
 
     act(() => rejectSave(new Error("save failed")));
     await waitFor(() =>
-      expect(screen.getByRole("menuitemcheckbox", { name: /Auto review/ })).toHaveAttribute("aria-checked", "false"),
+      expect(screen.getByRole("switch", { name: "Auto review" })).toHaveAttribute("aria-checked", "false"),
     );
   });
   it("uses the same review panel and Cloud control-plane actions for cloud sessions", async () => {

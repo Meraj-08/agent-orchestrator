@@ -900,8 +900,6 @@
 	"inspector.review.run": "리뷰 실행",
 	"inspector.review.runLatest": "PR 다시 리뷰",
 	"inspector.review.session": "리뷰 실행",
-	"inspector.review.moreOptions": "리뷰 옵션 더 보기",
-	"inspector.review.autoReviewHint": "새 커밋마다 리뷰",
 	"inspector.review.openReviewerFor": "{{agent}} 리뷰어 열기",
 	"inspector.review.noReviewerSession": "아직 리뷰어 세션이 없습니다",
 	"inspector.review.selectLockedRunning": "리뷰 실행 중에는 변경할 수 없습니다",

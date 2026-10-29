@@ -896,8 +896,6 @@
 	"inspector.review.run": "Run review",
 	"inspector.review.runLatest": "Review latest commit",
 	"inspector.review.session": "Trigger review",
-	"inspector.review.moreOptions": "More review options",
-	"inspector.review.autoReviewHint": "Reviews each new commit",
 	"inspector.review.openReviewerFor": "Open {{agent}} reviewer",
 	"inspector.review.noReviewerSession": "No reviewer session yet",
 	"inspector.review.selectLockedRunning": "Locked while a review runs",

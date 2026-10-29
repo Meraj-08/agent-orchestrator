@@ -900,8 +900,6 @@
 	"inspector.review.run": "Review ausführen",
 	"inspector.review.runLatest": "PR erneut prüfen",
 	"inspector.review.session": "Review auslösen",
-	"inspector.review.moreOptions": "Weitere Review-Optionen",
-	"inspector.review.autoReviewHint": "Prüft jeden neuen Commit",
 	"inspector.review.openReviewerFor": "{{agent}}-Reviewer öffnen",
 	"inspector.review.noReviewerSession": "Noch keine Reviewer-Sitzung",
 	"inspector.review.selectLockedRunning": "Gesperrt, solange ein Review läuft",

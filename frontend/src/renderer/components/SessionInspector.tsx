@@ -29,7 +29,6 @@ import {
 import {
 	Archive,
 	ArrowUpRight,
-	Check,
 	ChevronRight,
 	CircleAlert,
 	CircleCheck,
@@ -43,9 +42,7 @@ import {
 	SearchCheck,
 	History,
 	MoreHorizontal,
-	MoreVertical,
 	CircleStop,
-	SquareTerminal,
 	type LucideIcon,
 	GitPullRequestDraft,
 	GitPullRequestClosed,
@@ -64,9 +61,8 @@ import { formatTimeCompact } from "../lib/format-time";
 import { SessionArtifactsView, type ArtifactOpenRequest } from "./SessionArtifactsView";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { InfoRow, InfoRowLink } from "./InspectorInfoRow";
-import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
-import { actionMenuItemClass } from "./ui/menu-styles";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
+import { AgentAvatar } from "./AgentAvatar";
 import { openLinkInSystemBrowser } from "../lib/external-link-policy";
 import { OrchestratorChildrenSection } from "./OrchestratorChildrenSection";
 import { ProductExternalLink } from "./ProductExternalLink";
@@ -3208,199 +3204,200 @@ function ReviewPanel({
 	];
 
 	return (
-		<div
-			aria-label={t("inspector.review.controls")}
-			className="flex min-w-0 flex-col gap-1 px-3 pt-1.5 pb-3.5"
-			data-testid="review-toolbar"
-			role="group"
-		>
-			{error ? (
-				<p className="m-0 flex min-w-0 items-start gap-1.5 text-xs text-error" role="alert">
-					<CircleX aria-hidden="true" className="mt-0.5 size-icon-sm shrink-0" />
-					<span className="min-w-0">{apiErrorMessage(error, t("inspector.reviewRequestFailed"))}</span>
-				</p>
-			) : null}
-			{autoReviewFailure ? (
-				<p className="m-0 flex min-w-0 items-start gap-1.5 text-xs text-error" role="status">
-					<CircleX aria-hidden="true" className="mt-0.5 size-icon-sm shrink-0" />
-					<span className="min-w-0">
-						<span className="font-semibold">
-							{t("inspector.autoReview")} {t("inspector.review.failed")}:
-						</span>{" "}
-						{autoReviewFailure}
-					</span>
-				</p>
-			) : null}
-			{notice ? (
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<button
-							aria-label={notice}
-							className="flex max-w-full shrink-0 items-start gap-1 self-start rounded-sm text-left text-xs font-medium text-muted-foreground transition-colors duration-fast hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-							type="button"
-						>
-							<Info aria-hidden="true" className="mt-0.5 size-icon-2xs shrink-0" />
-							<span className="min-w-0">{t("inspector.reviewAlreadyRanShort")}</span>
-						</button>
-					</TooltipTrigger>
-					<TooltipContent className="max-w-56">{notice}</TooltipContent>
-				</Tooltip>
-			) : null}
-			<div className="review-run-controls-container flex min-h-8 min-w-0 items-center gap-1.5">
-				<div className="flex min-w-0 flex-1 items-center gap-1.5">
-					<DisabledReason reason={selectDisabled ? selectDisabledReason : undefined}>
-						{cloud ? (
-							<Select
-								disabled={reviewRunning || isTriggering || isCancelling || isInstallingCloudHarness}
-								onValueChange={(harness) => onCloudReviewerHarnessChange?.(harness)}
-								value={cloudReviewerHarness}
+		<Section surface={false} title={t("inspector.review.controls")}>
+			<div
+				aria-label={t("inspector.review.controls")}
+				className="flex min-w-0 flex-col gap-3"
+				data-testid="review-toolbar"
+				role="group"
+			>
+				{error ? (
+					<p className="m-0 flex min-w-0 items-start gap-1.5 text-xs text-error" role="alert">
+						<CircleX aria-hidden="true" className="mt-0.5 size-icon-sm shrink-0" />
+						<span className="min-w-0">{apiErrorMessage(error, t("inspector.reviewRequestFailed"))}</span>
+					</p>
+				) : null}
+				{autoReviewFailure ? (
+					<p className="m-0 flex min-w-0 items-start gap-1.5 text-xs text-error" role="status">
+						<CircleX aria-hidden="true" className="mt-0.5 size-icon-sm shrink-0" />
+						<span className="min-w-0">
+							<span className="font-semibold">
+								{t("inspector.autoReview")} {t("inspector.review.failed")}:
+							</span>{" "}
+							{autoReviewFailure}
+						</span>
+					</p>
+				) : null}
+				{notice ? (
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<button
+								aria-label={notice}
+								className="flex max-w-full shrink-0 items-start gap-1 self-start rounded-sm text-left text-xs font-medium text-muted-foreground transition-colors duration-fast hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+								type="button"
 							>
-								<SelectTrigger
-									aria-label={t("inspector.selectReviewerAgent")}
-									className="h-control-md max-w-[11rem] text-xs"
-									size="sm"
-								>
-									<SelectValue placeholder={t("inspector.selectReviewerAgent")} />
-								</SelectTrigger>
-								<SelectContent align="start">
-									{["claude-code", "codex", "cursor"].map((harness) => (
-										<SelectItem key={harness} value={harness}>
-											{agentLabel(harness)}
-											{cloudReviewerHarnesses.includes(harness) ? "" : " · Connect credential"}
-										</SelectItem>
-									))}
-								</SelectContent>
-							</Select>
-						) : (
-							<ReviewerSelect
-								ariaLabel={t("inspector.selectReviewerAgent")}
-								agents={agentCatalog?.agents}
-								contentAlign="start"
-								defaultHarness={resolvedDefaultHarness}
-								disabled={selectDisabled}
-								onChange={(next) => onReviewerHarnessPreviewChange(next as ReviewerHarness | "")}
-								onConfigChange={(harness, config) => onReviewerOverrideChange(harness as ReviewerHarness | "", config)}
-								model={reviewerModel}
-								mode={reviewerMode}
-								hostId={hostId}
-								projectId={session.workspaceId}
-								triggerClassName="review-run-agent-select h-control-md w-auto min-w-0 max-w-full shrink justify-start px-2 text-left text-xs"
-								value={reviewerOverride}
-							/>
-						)}
-					</DisabledReason>
-					{cloud && cloudHarnessStatuses.some(
-						(entry) => entry.harness === cloudReviewerHarness && entry.status !== "ready",
-					) ? (
-						<Button
-							disabled={isInstallingCloudHarness || reviewRunning}
-							onClick={onCloudInstallHarness}
-							size="sm"
-							type="button"
-							variant="outline"
-						>
-							{isInstallingCloudHarness ? "Installing…" : "Install"}
-						</Button>
-					) : null}
-				</div>
-				<DisabledReason reason={primaryDisabled ? primaryDisabledReason : undefined}>
-					<Button
-						aria-label={primaryReviewActionLabel}
-						className="shrink-0 gap-1 px-2 text-xs [&_svg]:size-icon-sm"
-						disabled={primaryDisabled}
-						onClick={reviewRunning ? onCancel : onTrigger}
-						size="sm"
-						type="button"
-						variant={reviewRunning || reviewHasRun ? "secondary" : "primary"}
-					>
-						{reviewRunning ? <CircleStop aria-hidden="true" /> : <Play aria-hidden="true" />}
-						<span className="review-run-action-label">{primaryReviewActionLabel}</span>
-					</Button>
-				</DisabledReason>
-				<DropdownMenu>
-					<DropdownMenuTrigger asChild>
-						<Button
-							aria-label={t("inspector.review.moreOptions")}
-							className="shrink-0 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 [&_svg]:size-icon-sm"
-							size="icon-sm"
-							type="button"
-							variant="ghost"
-						>
-							<MoreVertical aria-hidden="true" />
-						</Button>
-					</DropdownMenuTrigger>
-					<DropdownMenuContent align="end" className="w-64">
-						<DropdownMenuPrimitive.CheckboxItem
-							checked={autoReviewEnabled}
-							className={cn(actionMenuItemClass, "items-start")}
-							disabled={isAutoReviewSaving}
-							onCheckedChange={(checked) => onAutoReviewChange(checked === true)}
-						>
-							<span className="flex size-icon-lg shrink-0 items-center justify-center">
-								<DropdownMenuPrimitive.ItemIndicator>
-									<Check aria-hidden="true" />
-								</DropdownMenuPrimitive.ItemIndicator>
-							</span>
-							<span className="flex min-w-0 flex-col gap-0.5">
-								<span>{t("inspector.autoReview")}</span>
-								<span className="text-caption text-muted-foreground">{t("inspector.review.autoReviewHint")}</span>
-							</span>
-						</DropdownMenuPrimitive.CheckboxItem>
-						{!cloud ? (
-							<>
-								<DropdownMenuSeparator />
-								{openableReviewers.length > 0 ? (
-									openableReviewers.map((surface) => (
-										<DropdownMenuItem
-											className="items-start"
-											disabled={surface.mode !== "chat" && !surface.handleId}
-											key={surface.reviewId || surface.handleId || surface.harness}
-											onSelect={() => onOpenReviewer(surface)}
+								<Info aria-hidden="true" className="mt-0.5 size-icon-2xs shrink-0" />
+								<span className="min-w-0">{t("inspector.reviewAlreadyRanShort")}</span>
+							</button>
+						</TooltipTrigger>
+						<TooltipContent className="max-w-56">{notice}</TooltipContent>
+					</Tooltip>
+				) : null}
+				{/* The same labeled rows as the Review controls on main: reviewer, Auto
+				    review, then the run and archive buttons. */}
+				<div className="review-run-controls-container flex min-w-0 flex-col text-xs">
+					<div className="flex min-h-8 min-w-0 items-center justify-between gap-3 py-1">
+						<span className="min-w-0 text-sm text-settings-label">{t("inspector.selectReviewerAgent")}</span>
+						<div className="flex min-w-0 items-center justify-end gap-1.5">
+							<DisabledReason reason={selectDisabled ? selectDisabledReason : undefined}>
+								{cloud ? (
+									<Select
+										disabled={reviewRunning || isTriggering || isCancelling || isInstallingCloudHarness}
+										onValueChange={(harness) => onCloudReviewerHarnessChange?.(harness)}
+										value={cloudReviewerHarness}
+									>
+										<SelectTrigger
+											aria-label={t("inspector.selectReviewerAgent")}
+											className="h-control-md max-w-[11rem] text-xs"
+											size="sm"
 										>
-											<SquareTerminal aria-hidden="true" />
-											<span className="flex min-w-0 flex-col gap-0.5">
-												<span>{t("inspector.review.openReviewerFor", { agent: agentLabel(surface.harness) })}</span>
-												{surface.mode !== "chat" && !surface.handleId ? <span className="text-caption">{t("inspector.review.noReviewerSession")}</span> : null}
-											</span>
-										</DropdownMenuItem>
-									))
+											<SelectValue placeholder={t("inspector.selectReviewerAgent")} />
+										</SelectTrigger>
+										<SelectContent align="end">
+											{["claude-code", "codex", "cursor"].map((harness) => (
+												<SelectItem key={harness} value={harness}>
+													{agentLabel(harness)}
+													{cloudReviewerHarnesses.includes(harness) ? "" : " · Connect credential"}
+												</SelectItem>
+											))}
+										</SelectContent>
+									</Select>
 								) : (
-									<DropdownMenuItem className="items-start" disabled>
-										<SquareTerminal aria-hidden="true" />
-										<span className="flex min-w-0 flex-col gap-0.5">
-											<span>{t("inspector.review.openReviewer")}</span>
-											<span className="text-caption">{t("inspector.review.noReviewerSession")}</span>
-										</span>
-									</DropdownMenuItem>
+									<ReviewerSelect
+										ariaLabel={t("inspector.selectReviewerAgent")}
+										agents={agentCatalog?.agents}
+										contentAlign="end"
+										defaultHarness={resolvedDefaultHarness}
+										disabled={selectDisabled}
+										onChange={(next) => onReviewerHarnessPreviewChange(next as ReviewerHarness | "")}
+										onConfigChange={(harness, config) => onReviewerOverrideChange(harness as ReviewerHarness | "", config)}
+										model={reviewerModel}
+										mode={reviewerMode}
+										hostId={hostId}
+										projectId={session.workspaceId}
+										triggerClassName="review-run-agent-select ml-auto h-control-md w-auto min-w-0 shrink-0 justify-end px-2 text-right text-xs"
+										value={reviewerOverride}
+									/>
 								)}
-								<DropdownMenuItem className="items-start" disabled={killDisabled} onSelect={onKill}>
-									<Archive aria-hidden="true" />
-									<span className="flex min-w-0 flex-col gap-0.5">
-										<span>{archiveActionLabel}</span>
-										{!hasReviewerSession ? <span className="text-caption">{t("inspector.review.noReviewerSession")}</span> : null}
+							</DisabledReason>
+							{cloud && cloudHarnessStatuses.some(
+								(entry) => entry.harness === cloudReviewerHarness && entry.status !== "ready",
+							) ? (
+								<Button
+									disabled={isInstallingCloudHarness || reviewRunning}
+									onClick={onCloudInstallHarness}
+									size="sm"
+									type="button"
+									variant="outline"
+								>
+									{isInstallingCloudHarness ? "Installing…" : "Install"}
+								</Button>
+							) : null}
+						</div>
+					</div>
+					{/* Several reviewers can work on one worker at once (an agent may ask
+					    a reviewer other than the selected one), so each live reviewer
+					    gets a row to open it whenever one is not the selected reviewer. */}
+					{!cloud && openableReviewers.some((surface) => !currentSurface || !sameSurface(surface, currentSurface))
+						? openableReviewers.map((surface) => (
+								<div
+									className="flex min-h-8 min-w-0 items-center justify-between gap-3 py-1"
+									key={surface.reviewId || surface.handleId || surface.harness}
+								>
+									<span className="flex min-w-0 items-center gap-1.5 text-sm text-foreground">
+										<AgentAvatar className="size-4" decorative provider={surface.harness} />
+										<span className="truncate">{agentLabel(surface.harness)}</span>
 									</span>
-								</DropdownMenuItem>
-							</>
-						) : null}
-					</DropdownMenuContent>
-				</DropdownMenu>
+									<Button
+										aria-label={t("inspector.review.openReviewerFor", { agent: agentLabel(surface.harness) })}
+										className="shrink-0 px-1.5 text-xs"
+										disabled={surface.mode !== "chat" && !surface.handleId}
+										onClick={() => onOpenReviewer(surface)}
+										size="sm"
+										type="button"
+										variant="ghost"
+									>
+										{t("inspector.review.openReviewer")}
+									</Button>
+								</div>
+							))
+						: null}
+					<InspectorPolicyRow
+						checked={autoReviewEnabled}
+						description={t("inspector.autoReviewDescription")}
+						disabled={isAutoReviewSaving}
+						id={`auto-review-${sessionUiKey(session.id, hostId)}`}
+						label={t("inspector.autoReview")}
+						onCheckedChange={onAutoReviewChange}
+						tooltipClassName="max-w-64"
+					/>
+					<div className="flex min-h-8 min-w-0 items-center justify-between gap-3 py-1">
+						<span className="text-sm text-settings-label">{t("inspector.review.session")}</span>
+						<div className="flex min-w-0 items-center justify-end gap-1.5">
+							<DisabledReason reason={primaryDisabled ? primaryDisabledReason : undefined}>
+								<Button
+									aria-label={primaryReviewActionLabel}
+									className="shrink-0 gap-1 px-1.5 text-xs [&_svg]:size-icon-sm"
+									disabled={primaryDisabled}
+									onClick={reviewRunning ? onCancel : onTrigger}
+									size="sm"
+									type="button"
+									variant={reviewRunning ? "ghost" : reviewHasRun ? "secondary" : "primary"}
+								>
+									{reviewRunning ? <CircleStop aria-hidden="true" /> : <Play aria-hidden="true" />}
+									<span className="review-run-action-label">{primaryReviewActionLabel}</span>
+								</Button>
+							</DisabledReason>
+							{!cloud ? (
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<span className="inline-flex">
+											<Button
+												aria-label={archiveActionLabel}
+												className="shrink-0 [&_svg]:size-icon-sm"
+												disabled={killDisabled}
+												onClick={onKill}
+												size="icon-sm"
+												type="button"
+												variant="ghost"
+											>
+												<Archive aria-hidden="true" />
+											</Button>
+										</span>
+									</TooltipTrigger>
+									<TooltipContent>{hasReviewerSession ? archiveActionLabel : t("inspector.review.noReviewerSession")}</TooltipContent>
+								</Tooltip>
+							) : null}
+						</div>
+					</div>
+				</div>
+				<AnimatePresence initial={false}>
+					{inFlight.map((review) => (
+						<ReviewReveal key={review.latestRun?.id ?? review.prUrl}>
+							<ReviewNowRow
+								disabled={isCancelling || isKilling || isSwitchingReviewer}
+								harness={review.latestRun?.harness || activeReviewerHarness}
+								isCancelling={isCancelling}
+								number={review.prNumber}
+								onCancel={onCancel}
+								startedAt={review.latestRun?.createdAt}
+							/>
+						</ReviewReveal>
+					))}
+				</AnimatePresence>
+				<p aria-atomic="true" aria-live="polite" className="sr-only" data-testid="review-live-region">{announcement}</p>
 			</div>
-			<AnimatePresence initial={false}>
-				{inFlight.map((review) => (
-					<ReviewReveal key={review.latestRun?.id ?? review.prUrl}>
-						<ReviewNowRow
-							disabled={isCancelling || isKilling || isSwitchingReviewer}
-							harness={review.latestRun?.harness || activeReviewerHarness}
-							isCancelling={isCancelling}
-							number={review.prNumber}
-							onCancel={onCancel}
-							startedAt={review.latestRun?.createdAt}
-						/>
-					</ReviewReveal>
-				))}
-			</AnimatePresence>
-			<p aria-atomic="true" aria-live="polite" className="sr-only" data-testid="review-live-region">{announcement}</p>
-		</div>
+		</Section>
 	);
 }
 

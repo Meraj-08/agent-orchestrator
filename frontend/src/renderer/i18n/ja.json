@@ -900,8 +900,6 @@
 	"inspector.review.run": "レビューを実行",
 	"inspector.review.runLatest": "PRを再レビュー",
 	"inspector.review.session": "レビューを実行",
-	"inspector.review.moreOptions": "その他のレビューオプション",
-	"inspector.review.autoReviewHint": "新しいコミットごとにレビュー",
 	"inspector.review.openReviewerFor": "{{agent}} レビュアーを開く",
 	"inspector.review.noReviewerSession": "レビュアーセッションはまだありません",
 	"inspector.review.selectLockedRunning": "レビュー実行中は変更できません",

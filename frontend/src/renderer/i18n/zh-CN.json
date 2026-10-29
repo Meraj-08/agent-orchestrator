@@ -899,8 +899,6 @@
 	"inspector.review.run": "运行评审",
 	"inspector.review.runLatest": "重新评审 PR",
 	"inspector.review.session": "触发评审",
-	"inspector.review.moreOptions": "更多评审选项",
-	"inspector.review.autoReviewHint": "评审每个新提交",
 	"inspector.review.openReviewerFor": "打开 {{agent}} 评审者",
 	"inspector.review.noReviewerSession": "还没有评审者会话",
 	"inspector.review.selectLockedRunning": "评审运行时已锁定",
