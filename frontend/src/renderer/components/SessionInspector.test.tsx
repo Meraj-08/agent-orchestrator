@@ -11,6 +11,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetPRSectionExpansion, SessionInspector } from "./SessionInspector";
+import { resetLineageExpansion } from "./SessionLineage";
 import { TooltipProvider } from "./ui/tooltip";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
@@ -311,6 +312,7 @@ const reviewState = (n: number, status: string, targetSha = `sha-${n}`) => ({
 
 beforeEach(() => {
   resetPRSectionExpansion();
+  resetLineageExpansion();
   cloudCpMock.cancelSessionReviews.mockReset();
   cloudCpMock.getSessionReviewState.mockReset();
   cloudCpMock.inspectSessionReviewerHarnesses.mockReset();
@@ -4646,11 +4648,27 @@ describe("SessionInspector branch summary", () => {
   function mockGitState({
     uncommitted = [],
     committed = [],
+    history = [],
     prs,
-  }: { uncommitted?: ChangedFile[]; committed?: ChangedFile[]; prs?: SessionPRSummary[] }) {
+  }: { uncommitted?: ChangedFile[]; committed?: ChangedFile[]; history?: string[]; prs?: SessionPRSummary[] }) {
     const respond = commonGetsResponder();
     getMock.mockImplementation(async (path: string) => {
       if (prs && path === "/api/v1/sessions/{sessionId}/pr") return { data: { prs, linkedPrs: [] }, error: undefined };
+      if (path === "/api/v1/sessions/{sessionId}/workspace/history" && history.length > 0) {
+        return {
+          data: {
+            sessionId: "sess-1",
+            commits: history.map((subject, index) => ({
+              sha: `h${index}`,
+              subject,
+              author: "ada",
+              timestamp: `2026-06-15T10:0${index}:00Z`,
+              files: [],
+            })),
+          },
+          error: undefined,
+        };
+      }
       if (path === "/api/v1/sessions/{sessionId}/workspace/manifest") {
         return {
           data: {
@@ -4818,6 +4836,73 @@ describe("SessionInspector branch summary", () => {
 
     expect(await screen.findByText("pushed")).toBeInTheDocument();
     expect(screen.queryByText(/behind main/)).not.toBeInTheDocument();
+  });
+
+  const lineageBranch = { ...pushed(2), base: "main", baseRef: "origin/main", behind: 3 };
+
+  it("draws the lineage of an open branch: the base, its commits, and the split", async () => {
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], history: ["second change", "first change"] });
+    renderWithQuery(<SessionInspector session={session([], { branchState: lineageBranch })} />);
+
+    const lineage = within(await screen.findByTestId("session-lineage"));
+    const items = lineage.getAllByRole("listitem").map((item) => item.textContent);
+    expect(items).toEqual(["main+3 new since the split", "second change", "first change", "split from main"]);
+    expect(lineage.queryByText(/merged into/)).not.toBeInTheDocument();
+  });
+
+  it("collapses a long branch to its newest commits", async () => {
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], history: ["c5", "c4", "c3", "c2", "c1", "c0"] });
+    renderWithQuery(<SessionInspector session={session([], { branchState: { ...lineageBranch, commits: 6 } })} />);
+
+    const lineage = within(await screen.findByTestId("session-lineage"));
+    expect(lineage.getByText("c2")).toBeInTheDocument();
+    expect(lineage.queryByText("c1")).not.toBeInTheDocument();
+    expect(lineage.getByText("+2 more")).toBeInTheDocument();
+  });
+
+  it("shows where a merged branch came back while its tip is the merged PR's head", async () => {
+    const merged = prSummary(7, "merged", { stateChangedAt: new Date(Date.now() - 7 * 86_400_000).toISOString() });
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], history: ["second change", "first change"], prs: [merged] });
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "merged")], { branchState: { ...lineageBranch, head: "sha-7" } })} />,
+      undefined,
+      (client) => seedPRSummaries(client, [merged]),
+    );
+
+    const lineageEl = await screen.findByTestId("session-lineage");
+    expect(await within(lineageEl).findByText("merged into main 7d ago")).toBeInTheDocument();
+    // With the branch rows, which leave the folded PR section out of sight.
+    expect(screen.getByRole("region", { name: "Branch" })).toContainElement(lineageEl);
+  });
+
+  it("folds the lineage to its header, keeps the base's news, and remembers the choice", async () => {
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], history: ["second change", "first change"] });
+    const view = renderWithQuery(<SessionInspector session={session([], { branchState: lineageBranch })} />);
+
+    const toggle = await screen.findByRole("button", { name: /^Lineage/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).not.toHaveAttribute("aria-controls");
+    expect(toggle).toHaveTextContent("+3 new since the split");
+
+    view.unmount();
+    renderWithQuery(<SessionInspector session={session([], { branchState: lineageBranch })} />);
+    expect(await screen.findByRole("button", { name: /^Lineage/ })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("does not call a branch merged once a new commit moves its tip", async () => {
+    const merged = prSummary(7, "merged", { stateChangedAt: new Date(Date.now() - 7 * 86_400_000).toISOString() });
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], history: ["after the merge", "first change"], prs: [merged] });
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "merged")], { branchState: { ...lineageBranch, head: "sha-new" } })} />,
+      undefined,
+      (client) => seedPRSummaries(client, [merged]),
+    );
+
+    const lineage = within(await screen.findByTestId("session-lineage"));
+    expect(await lineage.findByText("after the merge")).toBeInTheDocument();
+    expect(lineage.queryByText(/merged into/)).not.toBeInTheDocument();
   });
 
   it("commits without pushing from the menu", async () => {

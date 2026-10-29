@@ -21,6 +21,7 @@ import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { BranchNamingLabel } from "./BranchNamingLabel";
+import { SessionLineage } from "./SessionLineage";
 import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode";
 import { useSessionGitActionStore, type SessionGitActionKind } from "../stores/session-git-action-store";
 import type { SessionBranchState, WorkspaceSession } from "../types/workspace";
@@ -54,6 +55,7 @@ export type BranchWork = { content: ReactNode; note?: string };
 
 export function SessionBranchSummary({
 	hostId,
+	mergedAt,
 	onOpenFiles,
 	openPRNumber,
 	pullRequests,
@@ -62,6 +64,8 @@ export function SessionBranchSummary({
 	title,
 }: {
 	hostId?: string;
+	/** When the PR whose head is the branch tip merged; absent while the branch carries unshipped work. */
+	mergedAt?: string;
 	onOpenFiles: () => void;
 	/** The open or draft PR that new commits would update. */
 	openPRNumber?: number;
@@ -201,6 +205,7 @@ export function SessionBranchSummary({
 					note={facts.branch?.conflicts ? t("inspector.git.conflicts") : undefined}
 				/>
 			) : null}
+			{naming ? null : <SessionLineage hostId={hostId} mergedAt={mergedAt} session={session} />}
 			{action ? <div className={hasWork ? "mt-3" : undefined}>{action}</div> : null}
 			{sendError ? (
 				<p className="mt-1.5 text-xs leading-normal text-error" role="status">

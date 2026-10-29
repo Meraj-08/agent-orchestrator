@@ -437,6 +437,11 @@ const SummaryView = memo(function SummaryView({
 		? t("inspector.artifacts", { count: artifacts.length })
 		: t("inspector.artifact");
 	const openPRNumber = prSummaries.find((pr) => pr.state === "open" || pr.state === "draft")?.number;
+	// "Merged into main" only while the branch tip is what a merged PR shipped;
+	// a new commit after the merge is unshipped work again.
+	const shippedMerge = openPRNumber === undefined && session.branchState?.head
+		? prSummaries.find((pr) => pr.state === "merged" && pr.headSha === session.branchState?.head)
+		: undefined;
 	// CI, review, and merge policies act on a PR. Standalone sessions keep the row for Archive.
 	const showSessionControls = hasPRs || session.workspaceId === STANDALONE_WORKSPACE_ID;
 	// Cloud orchestrators list the workers they spawned; local orchestrators
@@ -467,6 +472,7 @@ const SummaryView = memo(function SummaryView({
 			branch={
 				<SessionBranchSummary
 					hostId={hostId}
+					mergedAt={shippedMerge?.stateChangedAt ?? undefined}
 					onOpenFiles={onOpenFiles}
 					openPRNumber={openPRNumber}
 					shippedHeadShas={prSummaries.filter((pr) => pr.state === "merged" || pr.state === "closed").map((pr) => pr.headSha)}
