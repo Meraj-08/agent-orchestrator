@@ -16,12 +16,13 @@ import (
 // AO does not download harnesses itself: package managers and vendor scripts
 // do, and none of them reports structured progress to a non-TTY child. The
 // tracker reads the installer's own output instead and reports only what that
-// output states: the phase it is in, and a percentage when the installer
+// output states: the phase a line names, and a percentage when the installer
 // prints sizes or counts (uv's per-package sizes, Homebrew's dependency list,
 // a curl-style "45%" or "12 MB / 60 MB"). Installers that print neither, like
-// npm, show their phase with no percentage rather than an invented one.
+// npm, show no percentage rather than an invented one, and output that names
+// no phase leaves the phase unset rather than guessing one.
 
-// ProgressPhase is the installer phase the latest output points to.
+// ProgressPhase is the installer phase the output names.
 type ProgressPhase string
 
 // Progress phases: fetching packages or binaries, then unpacking and linking them.
@@ -32,7 +33,7 @@ const (
 
 // Progress is the live view of a running install, read from installer output.
 type Progress struct {
-	Phase   ProgressPhase `json:"phase" enum:"downloading,installing" description:"Installer phase the latest output points to."`
+	Phase   ProgressPhase `json:"phase,omitempty" enum:"downloading,installing" description:"Installer phase the output names. Absent until a line names one."`
 	Percent *int          `json:"percent,omitempty" minimum:"0" maximum:"100" description:"Progress through the current phase, present only when the installer's output states sizes or counts."`
 	Detail  string        `json:"detail,omitempty" description:"The installer's latest output line."`
 }
@@ -60,12 +61,20 @@ var (
 	brewFormula      = regexp.MustCompile(`^==> Installing \S+(?: --\S+)*$`)
 	byteRatio        = regexp.MustCompile(`([\d.]+)\s*([KMGT]?i?B)\s*/\s*([\d.]+)\s*([KMGT]?i?B)`)
 	percentValue     = regexp.MustCompile(`(?:^|[\s(\[])(\d{1,3}(?:\.\d+)?)\s?%`)
-	installingLine   = regexp.MustCompile(`^(?:==> (?:Pouring|Installing|Linking|Caveats)|🍺|Installing\b|Installed\b|Extracting\b|Unpacking\b|Linking\b|Prepared \d+ packages?|(?:added|changed) \d+ packages?)`)
+	// Scripts often prefix a log level ("[INFO] Downloading …") or log in
+	// lower case ("downloading uv 0.5.9").
+	installingLine = regexp.MustCompile(`(?i)^(?:\[[a-z]+\]\s*)?(?:==> (?:Pouring|Linking|Caveats)|🍺|Installed\b|Extracting\b|Unpacking\b|Linking\b|Prepared \d+ packages?|(?:added|changed) \d+ packages?)`)
+	// A bare "Installing …" is often a script's title ("==> Installing Codex
+	// CLI") printed before it downloads anything, so it marks installing only
+	// once a download line has appeared.
+	installStartLine = regexp.MustCompile(`(?i)^(?:\[[a-z]+\]\s*)?(?:==> )?Installing\b`)
+	// "Installing to: ~/.local/bin" names a destination before any download.
+	installTargetLine = regexp.MustCompile(`(?i)^(?:\[[a-z]+\]\s*)?installing (?:to|into)\b`)
 	// Vendor scripts announce the end of their download this way, then run
 	// their own checks, e.g. OpenHands' "[SUCCESS] OpenHands CLI v1.14.0
 	// installed successfully!".
 	installedLine   = regexp.MustCompile(`(?i)\b(?:installed successfully|successfully installed|installation (?:complete|completed|verified|successful))\b`)
-	downloadingLine = regexp.MustCompile(`^(?:==> (?:Fetching|Downloading)|✔︎ (?:Bottle|Formula|Resource|Cask)|Downloading\b|Fetching\b|Resolved \d+ packages?)`)
+	downloadingLine = regexp.MustCompile(`(?i)^(?:\[[a-z]+\]\s*)?(?:==> (?:Fetching|Downloading)|✔︎ (?:Bottle|Formula|Resource|Cask)|Downloading\b|Fetching\b|Resolved \d+ packages?)`)
 )
 
 // progressTracker is an io.Writer that forwards installer output and keeps
@@ -74,8 +83,8 @@ type progressTracker struct {
 	mu      sync.Mutex
 	dst     io.Writer
 	pending []byte
-	phase   ProgressPhase
-	percent int // -1 while the output states no progress
+	phase   ProgressPhase // "" until a line names one
+	percent int           // -1 while the output states no progress
 	detail  string
 	// uv reports each wheel's size when it starts and its name when done.
 	uvSizes map[string]float64
@@ -87,7 +96,7 @@ type progressTracker struct {
 }
 
 func newProgressTracker(dst io.Writer) *progressTracker {
-	return &progressTracker{dst: dst, phase: ProgressDownloading, percent: -1}
+	return &progressTracker{dst: dst, percent: -1}
 }
 
 func (t *progressTracker) Write(p []byte) (int, error) {
@@ -117,10 +126,14 @@ func (t *progressTracker) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// Snapshot returns the progress the output has reported so far.
+// Snapshot returns the progress the output has reported so far, or nil while
+// the installer has printed nothing.
 func (t *progressTracker) Snapshot() *Progress {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.phase == "" && t.detail == "" && t.percent < 0 {
+		return nil
+	}
 	progress := &Progress{Phase: t.phase, Detail: t.detail}
 	if t.percent >= 0 {
 		percent := t.percent
@@ -173,7 +186,11 @@ func (t *progressTracker) observe(raw string) {
 		t.percent = percent
 		return
 	}
-	if installingLine.MatchString(line) || installedLine.MatchString(line) {
+	if installTargetLine.MatchString(line) {
+		return
+	}
+	if installingLine.MatchString(line) || installedLine.MatchString(line) ||
+		(installStartLine.MatchString(line) && t.phase == ProgressDownloading) {
 		if t.setPhase(ProgressInstalling) && t.brewSteps == 0 {
 			t.percent = -1
 		}

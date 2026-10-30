@@ -6209,10 +6209,10 @@ export interface components {
             /** @description Progress through the current phase, present only when the installer's output states sizes or counts. */
             percent?: null | number;
             /**
-             * @description Installer phase the latest output points to.
+             * @description Installer phase the output names. Absent until a line names one.
              * @enum {string}
              */
-            phase: "downloading" | "installing";
+            phase?: "downloading" | "installing";
         };
         InvokeCueRequest: {
             /** @description Optional exact session target. Agent cues message it; command cues use its worktree. Omit it to spawn an agent worker or run a command in the project root. A supplied id must be non-blank and compatible, and never falls back to a replacement worker. Invocation body limit: 4 KiB. */

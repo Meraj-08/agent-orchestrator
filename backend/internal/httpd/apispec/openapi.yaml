@@ -17822,13 +17822,12 @@ components:
           - "null"
           - integer
         phase:
-          description: Installer phase the latest output points to.
+          description: Installer phase the output names. Absent until a line names
+            one.
           enum:
           - downloading
           - installing
           type: string
-      required:
-      - phase
       type: object
     InvokeCueRequest:
       properties:

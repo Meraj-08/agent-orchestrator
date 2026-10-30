@@ -89,18 +89,21 @@ func TestProgressTrackerReadsCarriageReturnPercentages(t *testing.T) {
 	if progress = trackOutput("\x1b[32m⠋\x1b[0m Bottle node (25.0.0)  12.0MB/48.0MB\n"); percentOf(progress) != 25 {
 		t.Fatalf("byte ratio = %+v, want 25%%", progress)
 	}
-	if progress = trackOutput("Installing binary\n", "Downloading helper\n"); progress.Phase != ProgressInstalling {
+	if progress = trackOutput("Downloading binary\n", "Installing binary\n", "Downloading helper\n"); progress.Phase != ProgressInstalling {
 		t.Fatalf("phase went back to %q after installing", progress.Phase)
 	}
 }
 
 func TestProgressTrackerMovesToInstallingWhenAScriptReportsSuccess(t *testing.T) {
 	// Captured from https://install.openhands.dev/install.sh without a TTY.
+	if progress := trackOutput("[INFO] Starting OpenHands CLI installation...\n"); progress.Phase != "" {
+		t.Fatalf("before any download line phase = %q, want none", progress.Phase)
+	}
 	head := "[INFO] Starting OpenHands CLI installation...\n" +
 		"[INFO] Installing to: /tmp/home/.local/bin/openhands\n" +
 		"[INFO] Downloading OpenHands CLI v1.14.0...\n"
 	if progress := trackOutput(head); progress.Phase != ProgressDownloading {
-		t.Fatalf("before the download ends phase = %q, want downloading", progress.Phase)
+		t.Fatalf("after the download line phase = %q, want downloading", progress.Phase)
 	}
 	progress := trackOutput(head, "[SUCCESS] OpenHands CLI v1.14.0 installed successfully!\n", "[INFO] Version information:\n")
 	if progress.Phase != ProgressInstalling || progress.Percent != nil {
@@ -108,10 +111,41 @@ func TestProgressTrackerMovesToInstallingWhenAScriptReportsSuccess(t *testing.T)
 	}
 }
 
+func TestProgressTrackerReportsNoPhaseUntilALineNamesOne(t *testing.T) {
+	if progress := trackOutput(); progress != nil {
+		t.Fatalf("silent installer = %+v, want no progress", progress)
+	}
+	// Captured from Aider's official script: lower case, no log-level prefix.
+	if progress := trackOutput("downloading uv 0.5.9 aarch64-apple-darwin\n"); progress.Phase != ProgressDownloading {
+		t.Fatalf("lower-case download line phase = %q, want downloading", progress.Phase)
+	}
+	if progress := trackOutput("downloading uv 0.5.9 aarch64-apple-darwin\n", "Installing aider...\n"); progress.Phase != ProgressInstalling {
+		t.Fatalf("install line after the download phase = %q, want installing", progress.Phase)
+	}
+}
+
+func TestProgressTrackerTreatsAScriptTitleAsNoPhase(t *testing.T) {
+	// Captured from https://chatgpt.com/codex/install.sh without a TTY.
+	head := "==> Installing Codex CLI\n" +
+		"==> Detected platform: macOS (Apple Silicon)\n" +
+		"==> Resolved version: 0.166.0\n"
+	if progress := trackOutput(head); progress.Phase != "" {
+		t.Fatalf("after the title phase = %q, want none", progress.Phase)
+	}
+	if progress := trackOutput(head, "==> Downloading Codex CLI\n"); progress.Phase != ProgressDownloading {
+		t.Fatalf("after the download line phase = %q, want downloading", progress.Phase)
+	}
+	progress := trackOutput(head, "==> Downloading Codex CLI\n",
+		"==> Installing standalone package to /tmp/home/.codex/packages/standalone/releases/0.166.0-aarch64-apple-darwin\n")
+	if progress.Phase != ProgressInstalling {
+		t.Fatalf("after the install step phase = %q, want installing", progress.Phase)
+	}
+}
+
 func TestProgressTrackerReportsNoPercentForNPM(t *testing.T) {
 	progress := trackOutput("npm warn deprecated glob@7.2.3: Glob versions prior to v9 are no longer supported\n")
-	if progress.Phase != ProgressDownloading || progress.Percent != nil {
-		t.Fatalf("npm = %+v, want downloading with no percent", progress)
+	if progress.Phase != "" || progress.Percent != nil || progress.Detail == "" {
+		t.Fatalf("npm = %+v, want its line with no phase and no percent", progress)
 	}
 	if progress = trackOutput("\n", "added 2 packages in 2m\n"); progress.Phase != ProgressInstalling || progress.Percent != nil {
 		t.Fatalf("npm summary = %+v, want installing with no percent", progress)
@@ -189,4 +223,32 @@ func TestAgentInstallPublishesOutputAndProgressWhileRunning(t *testing.T) {
 			t.Fatalf("live output was persisted: %+v", record)
 		}
 	}
+}
+
+func TestAgentInstallPublishesNoPhaseWhileTheInstallerIsSilent(t *testing.T) {
+	s := newTestService("darwin", "npm")
+	s.jobStore = newInstallJobStoreFake()
+	release := make(chan struct{})
+	s.commands = commandRunnerFunc(func(_ context.Context, _ []string, _, _ io.Writer) error {
+		<-release
+		return nil
+	})
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: "/Users/test/.npm/bin/codex", Output: "codex 1.2.3\n"}, nil
+	})
+
+	if _, err := s.StartAgent(context.Background(), TargetCodex, "npm"); err != nil {
+		t.Fatalf("StartAgent: %v", err)
+	}
+	// Past several publish ticks, so a default phase would have been published.
+	time.Sleep(3 * progressPublishInterval)
+	job, err := s.Status(context.Background(), TargetCodex)
+	close(release)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if job.Status != StatusInstalling || job.Progress != nil {
+		t.Fatalf("silent install = status %q progress %+v, want installing with no progress", job.Status, job.Progress)
+	}
+	waitForStatus(t, s, TargetCodex, StatusSucceeded)
 }

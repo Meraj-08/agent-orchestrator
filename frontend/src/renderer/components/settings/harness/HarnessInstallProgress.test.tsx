@@ -21,6 +21,8 @@ afterEach(() => {
 describe("install stage", () => {
 	it("follows the installer's phase, then verification", () => {
 		expect(installStage(job({}))).toBeUndefined();
+		// Output that names no phase (npm's warnings, a silent script's banner) marks no stage.
+		expect(installStage(job({ progress: { detail: "npm warn deprecated glob@7.2.3" } }))).toBeUndefined();
 		expect(installStage(job({ progress: { phase: "downloading" } }))).toBe("downloading");
 		expect(installStage(job({ progress: { phase: "installing" } }))).toBe("installing");
 		expect(installStage(job({ status: "verifying", progress: { phase: "installing", percent: 80 } }))).toBe("verifying");
