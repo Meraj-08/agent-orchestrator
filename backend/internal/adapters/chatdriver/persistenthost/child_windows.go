@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 	"unsafe"
@@ -122,7 +124,7 @@ func terminateProviderProcess(*exec.Cmd) error { return nil }
 // outlives its host), and a poll that lands while that delete holds the file
 // fails the same way.
 func openHostFile(path string) (*os.File, error) {
-	name, err := windows.UTF16PtrFromString(path)
+	name, err := windows.UTF16PtrFromString(extendedLengthPath(path))
 	if err != nil {
 		return nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}
@@ -133,6 +135,32 @@ func openHostFile(path string) (*os.File, error) {
 		return nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}
 	return os.NewFile(uintptr(handle), path), nil
+}
+
+// maxShortPath is the length below which os leaves a Windows path as it is;
+// longer paths only open with the extended-length prefix unless the process
+// opted in to long paths (MAX_PATH 260 minus room for an 8.3 name).
+const maxShortPath = 248
+
+// extendedLengthPath adds the \\?\ prefix that os adds before a long path
+// reaches the Windows API, so a host file that os.WriteFile could create is
+// readable through CreateFile too. Like os, it leaves short, already prefixed
+// and device paths alone, and expands the path first because the prefix turns
+// off Windows' own normalization of separators and dot segments.
+func extendedLengthPath(path string) string {
+	if strings.HasPrefix(path, `\??\`) ||
+		len(path) >= 4 && os.IsPathSeparator(path[0]) && os.IsPathSeparator(path[1]) &&
+			(path[2] == '?' || path[2] == '.') && os.IsPathSeparator(path[3]) {
+		return path
+	}
+	full, err := filepath.Abs(path)
+	if err != nil || len(full) < maxShortPath {
+		return path
+	}
+	if strings.HasPrefix(full, `\\`) {
+		return `\\?\UNC\` + full[2:]
+	}
+	return `\\?\` + full
 }
 
 // hostFileBusy reports a host file another handle still holds: a sharing

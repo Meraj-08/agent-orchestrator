@@ -210,3 +210,52 @@ func TestWindowsHostDescriptorReadAndRemovalDoNotBlockEachOther(t *testing.T) {
 		t.Fatalf("readDescriptor under a delete handle = (%+v, %v), want the descriptor", got, err)
 	}
 }
+
+func TestWindowsHostDescriptorReadsPastMaxPath(t *testing.T) {
+	// A data directory deep enough that host.json passes MAX_PATH. os writes
+	// it with the extended-length prefix; the share-delete reader must too.
+	dataDir := t.TempDir()
+	for len(dataDir) < windows.MAX_PATH {
+		dataDir = filepath.Join(dataDir, strings.Repeat("d", 40))
+	}
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	d := Descriptor{Version: ProtocolVersion, SessionID: "long-path", Address: "127.0.0.1:1", Token: "token", PID: os.Getpid()}
+	if err := writeDescriptor(dataDir, d); err != nil {
+		t.Fatal(err)
+	}
+	path, _ := descriptorPath(dataDir, d.SessionID)
+	if len(path) <= windows.MAX_PATH {
+		t.Fatalf("descriptor path is %d characters, want past MAX_PATH", len(path))
+	}
+
+	got, err := readDescriptor(dataDir, d.SessionID)
+	if err != nil || got.Token != d.Token {
+		t.Fatalf("readDescriptor past MAX_PATH = (%+v, %v), want the descriptor", got, err)
+	}
+	reader, err := openHostFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removeErr := os.Remove(path)
+	_ = reader.Close()
+	if removeErr != nil {
+		t.Fatalf("Remove past MAX_PATH under a host-file reader: %v", removeErr)
+	}
+}
+
+func TestExtendedLengthPathMatchesOS(t *testing.T) {
+	long := strings.Repeat("d", maxShortPath)
+	for _, tc := range []struct{ name, in, want string }{
+		{"short", `C:\ao\host.json`, `C:\ao\host.json`},
+		{"already extended", `\\?\C:\` + long, `\\?\C:\` + long},
+		{"device", `\\.\pipe\` + long, `\\.\pipe\` + long},
+		{"long drive path, normalized", `C:/ao/x/../` + long, `\\?\C:\ao\` + long},
+		{"long UNC path", `\\server\share\` + long, `\\?\UNC\server\share\` + long},
+	} {
+		if got := extendedLengthPath(tc.in); got != tc.want {
+			t.Errorf("%s: extendedLengthPath(%q) = %q, want %q", tc.name, tc.in, got, tc.want)
+		}
+	}
+}
