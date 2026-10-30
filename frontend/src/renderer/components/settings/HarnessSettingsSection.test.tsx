@@ -2436,6 +2436,27 @@ describe("HarnessSettingsSection", () => {
 		expect(listStatus).toHaveTextContent("Downloading 45%");
 	});
 
+	it("fills the bar from a percentage that names no phase and keeps the generic label", async () => {
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: catalog } as never;
+			if (path === "/api/v1/agents/installers") return { data: plans } as never;
+			if (path === "/api/v1/agents/install-jobs") {
+				return { data: { jobs: [{
+					target: "codex", status: "installing", method: "official-installer", startedAt: new Date().toISOString(),
+					progress: { percent: 45, detail: "############                45.0%" },
+				}] } } as never;
+			}
+			return { data: undefined } as never;
+		});
+		renderSection();
+		const page = await findAgentRow("codex");
+		// No phase named, so the label stays the generic one for a job this page did not start.
+		expect(await within(page).findByRole("status")).toHaveTextContent("Working…");
+		const bar = within(page).getByRole("progressbar", { name: "Working…" });
+		expect(bar).toHaveAttribute("aria-valuenow", "45");
+		expect(bar.firstElementChild).toHaveStyle({ width: "45%" });
+	});
+
 	it("hydrates interrupted jobs and offers verification", async () => {
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: catalog } as never;

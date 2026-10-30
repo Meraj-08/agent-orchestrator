@@ -178,10 +178,11 @@ export function showsInstallProgress(job?: Pick<InstallJob, "status">): boolean 
 	return job?.status === "installing" || job?.status === "running" || job?.status === "verifying";
 }
 
-/** The percentage the installer's output stated, only while it downloads or installs. */
+/** The percentage the installer's output stated while its command runs. A bar
+ * with no named phase (a script printing only "45%") still fills; the label
+ * then stays generic. */
 export function installPercent(job?: Pick<InstallJob, "status" | "progress">): number | undefined {
-	const stage = installStage(job);
 	const percent = job?.progress?.percent;
-	return (stage === "downloading" || stage === "installing") && typeof percent === "number" ? Math.max(0, Math.min(100, Math.round(percent))) : undefined;
+	return (job?.status === "installing" || job?.status === "running") && typeof percent === "number" ? Math.max(0, Math.min(100, Math.round(percent))) : undefined;
 }
 

@@ -32,6 +32,8 @@ describe("install stage", () => {
 
 	it("reports a percentage only while the installer stated one", () => {
 		expect(installPercent(job({ progress: { phase: "downloading", percent: 45.6 } }))).toBe(46);
+		// A script printing only a curl-style bar names no phase, but its percentage still counts.
+		expect(installPercent(job({ progress: { percent: 45 } }))).toBe(45);
 		expect(installPercent(job({ progress: { phase: "downloading" } }))).toBeUndefined();
 		expect(installPercent(job({ status: "verifying", progress: { phase: "installing", percent: 80 } }))).toBeUndefined();
 	});
