@@ -56,13 +56,19 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 }
 
 // deepseekLocalAuthStatus checks the Harness credential store first;
-// DEEPSEEK_API_KEY in the environment is the fallback.
+// DEEPSEEK_API_KEY in the environment is the fallback. An API key outranks an
+// account sign-in wherever it is set, because the default "deepseek-official"
+// route sends the key.
 func deepseekLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
-	status, ok, err := deepseekStoredAuthStatus(ctx)
+	status, method, ok, err := deepseekStoredAuthStatus(ctx)
 	if err == nil && ok && status.HasCredential() {
+		if method == domain.AgentAccountMethodAccount && strings.TrimSpace(os.Getenv(deepseekCredentialKey)) != "" {
+			// Recorded last, the environment key replaces the account evidence.
+			authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, deepseekCredentialKey)
+		}
 		return status, true, nil
 	}
 	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, deepseekCredentialKey) != "" {
@@ -71,16 +77,16 @@ func deepseekLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, 
 	return status, ok, err
 }
 
-func deepseekStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
+func deepseekStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, domain.AgentAccountMethod, bool, error) {
 	path, err := deepseekCredentialsPath()
 	if err != nil {
-		return ports.AgentAuthStatusUnknown, false, err
+		return ports.AgentAuthStatusUnknown, "", false, err
 	}
 	status, method, ok, err := deepseekCredentialsStatus(path)
 	if status == ports.AgentAuthStatusAuthorized {
 		ports.RecordAuthEvidence(ctx, authprobe.FileSource(path).WithMethod(method))
 	}
-	return status, ok, err
+	return status, method, ok, err
 }
 
 // deepseekCredentialsPath resolves the Harness credential store. DSH_HOME moves

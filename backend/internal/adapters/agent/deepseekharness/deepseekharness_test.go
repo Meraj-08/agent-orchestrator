@@ -397,8 +397,8 @@ refs:
 }
 
 // TestAuthStatusRecordsHowDeepSeekIsSignedIn keeps an account sign-in from being
-// reported as an API key, and an API key ahead of the account: the default
-// "deepseek-official" route uses the key.
+// reported as an API key, and an API key ahead of the account wherever it is
+// set: the default "deepseek-official" route uses the key.
 func TestAuthStatusRecordsHowDeepSeekIsSignedIn(t *testing.T) {
 	t.Setenv(deepseekCredentialKey, "")
 	accountGrant := `
@@ -412,10 +412,12 @@ func TestAuthStatusRecordsHowDeepSeekIsSignedIn(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		store string
+		env   string
 		want  domain.AgentAccountMethod
 	}{
 		{name: "account only", store: "version: 1\nrecords:" + accountGrant, want: domain.AgentAccountMethodAccount},
 		{name: "api key and account", store: "version: 1\nrefs:\n  DEEPSEEK_API_KEY: sk-live\nrecords:" + accountGrant, want: domain.AgentAccountMethodAPIKey},
+		{name: "account in the store, api key in the environment", store: "version: 1\nrecords:" + accountGrant, env: "sk-env", want: domain.AgentAccountMethodAPIKey},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), ".credentials.yaml")
@@ -423,12 +425,16 @@ func TestAuthStatusRecordsHowDeepSeekIsSignedIn(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Setenv(credentialsPathEnv, path)
+			t.Setenv(deepseekCredentialKey, tc.env)
 			ctx, evidence := ports.WithAuthEvidence(context.Background())
 			status, err := (&Plugin{resolvedBinary: "dsh"}).AuthStatus(ctx)
 			if err != nil || status != ports.AgentAuthStatusAuthorized {
 				t.Fatalf("status = (%q, %v), want authorized", status, err)
 			}
 			want := authprobe.FileSource(path).WithMethod(tc.want)
+			if tc.env != "" {
+				want = domain.EnvironmentSource(deepseekCredentialKey).WithMethod(tc.want)
+			}
 			if got := evidence.Identity(); got != want {
 				t.Fatalf("evidence = %+v, want %+v", got, want)
 			}

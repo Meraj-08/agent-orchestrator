@@ -58,7 +58,11 @@ DeepSeek Harness owns its credentials, which live in its own store
 surface: the ACP server advertises no auth methods and its `authenticate` call
 always succeeds. AO therefore documents setup rather than driving a login, and
 reads the store only to report whether a DeepSeek credential is present — the
-value is never copied, logged, or forwarded.
+value is never copied, logged, or forwarded. Either form counts: a
+`DEEPSEEK_API_KEY` entry (or that variable in AO's environment), or a DeepSeek
+account sign-in, which Harness keeps as the `deepseek-account-platform/default`
+grant. When both exist AO reports the API key, which the default
+`deepseek-official` route uses.
 
 ## Permissions
 
