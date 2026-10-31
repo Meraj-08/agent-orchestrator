@@ -29,10 +29,18 @@ const credentialsPathEnv = "DSH_CREDENTIALS_PATH"
 // its own.
 const deepseekCredentialKey = "DEEPSEEK_API_KEY" //nolint:gosec // a credential's name, not a credential value
 
-// AuthStatus reports whether DeepSeek Harness has a DeepSeek credential. The
-// Harness ACP server advertises no authentication surface (its initialize
-// response carries no auth methods and authenticate always succeeds), so the
-// only local evidence is the credential store, then the environment. Absent
+// deepseekAccountRecord is the record DeepSeek Harness writes when the user
+// signs in with a DeepSeek account through the browser: a grant whose payload
+// carries the account token the "deepseek-account" model route sends. Its
+// "deepseek-account-platform/device" sibling survives sign-out, so only this
+// record is evidence of a sign-in.
+const deepseekAccountRecord = "deepseek-account-platform/default"
+
+// AuthStatus reports whether DeepSeek Harness has a DeepSeek credential: an API
+// key or a DeepSeek account sign-in. The Harness ACP server advertises no
+// authentication surface (its initialize response carries no auth methods and
+// authenticate always succeeds), so the only local evidence is the credential
+// store, then the environment. Absent
 // evidence stays unknown: Harness may be routed through a provider configured in
 // its profile, which AO cannot see from here.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
@@ -68,9 +76,9 @@ func deepseekStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool,
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
 	}
-	status, ok, err := deepseekCredentialsStatus(path)
+	status, method, ok, err := deepseekCredentialsStatus(path)
 	if status == ports.AgentAuthStatusAuthorized {
-		ports.RecordAuthEvidence(ctx, authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAPIKey))
+		ports.RecordAuthEvidence(ctx, authprobe.FileSource(path).WithMethod(method))
 	}
 	return status, ok, err
 }
@@ -96,33 +104,52 @@ func deepseekCredentialsPath() (string, error) {
 // deepseekCredentialsStatus reads the store without exposing its contents. The
 // file is YAML: a current Harness writes `version: 1` with credentials under
 // `refs:`, mapping each addressable name straight to its secret, so a
-// DEEPSEEK_API_KEY ref with a non-empty value is the evidence AO looks for. The
-// walk stays shape-tolerant on purpose — it also accepts the pre-release flat
-// layout and a nested secret — because AO only decides whether to show the
-// setup action, and Harness owns the document's real validation.
+// DEEPSEEK_API_KEY ref with a non-empty value is the API-key evidence AO looks
+// for. The walk stays shape-tolerant on purpose — it also accepts the
+// pre-release flat layout and a nested secret — because AO only decides whether
+// to show the setup action, and Harness owns the document's real validation.
 //
-// A scoped record (`records: <scope>/<id>`) carries no such ref, so a store
-// holding only those stays unknown rather than claiming a route AO cannot
+// A DeepSeek account sign-in is the scoped record deepseekAccountRecord holding
+// a grant with a token. Other scoped records (`records: <scope>/<id>`), such as
+// a browser session, stay unknown rather than claiming a route AO cannot
 // attribute to DeepSeek.
-func deepseekCredentialsStatus(path string) (ports.AgentAuthStatus, bool, error) {
+func deepseekCredentialsStatus(path string) (ports.AgentAuthStatus, domain.AgentAccountMethod, bool, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // path is the Harness credential store, resolved above
 	if os.IsNotExist(err) {
-		return ports.AgentAuthStatusUnknown, false, nil
+		return ports.AgentAuthStatusUnknown, "", false, nil
 	}
 	if err != nil {
-		return ports.AgentAuthStatusUnknown, false, err
+		return ports.AgentAuthStatusUnknown, "", false, err
 	}
 	var store any
 	if err := yaml.Unmarshal(data, &store); err != nil {
-		return ports.AgentAuthStatusUnknown, false, fmt.Errorf("parse DeepSeek Harness credential store: %w", err)
+		return ports.AgentAuthStatusUnknown, "", false, fmt.Errorf("parse DeepSeek Harness credential store: %w", err)
 	}
 	if !supportedStoreLayout(store) {
-		return ports.AgentAuthStatusUnknown, false, nil
+		return ports.AgentAuthStatusUnknown, "", false, nil
 	}
 	if credentialEntryHasSecret(store, deepseekCredentialKey) {
-		return ports.AgentAuthStatusAuthorized, true, nil
+		return ports.AgentAuthStatusAuthorized, domain.AgentAccountMethodAPIKey, true, nil
 	}
-	return ports.AgentAuthStatusUnknown, false, nil
+	if accountGrantPresent(store) {
+		return ports.AgentAuthStatusAuthorized, domain.AgentAccountMethodAccount, true, nil
+	}
+	return ports.AgentAuthStatusUnknown, "", false, nil
+}
+
+// accountGrantPresent reports whether the store holds a DeepSeek account
+// sign-in: a grant record whose payload carries a non-empty token. The token
+// itself is never read beyond that check.
+func accountGrantPresent(store any) bool {
+	root, _ := store.(map[string]any)
+	records, _ := root["records"].(map[string]any)
+	record, _ := records[deepseekAccountRecord].(map[string]any)
+	if kind, _ := record["kind"].(string); kind != "grant" {
+		return false
+	}
+	payload, _ := record["payload"].(map[string]any)
+	token, _ := payload["token"].(string)
+	return strings.TrimSpace(token) != ""
 }
 
 // supportedStoreLayout reports whether the document is one a current DeepSeek

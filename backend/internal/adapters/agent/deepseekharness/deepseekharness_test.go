@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -284,6 +285,67 @@ records:
 			want: ports.AgentAuthStatusUnknown,
 		},
 		{
+			// A DeepSeek account sign-in (#7513): DeepSeek Harness stores the
+			// browser-login grant as this record, and the account model route
+			// sends its token.
+			name: "deepseek account sign-in",
+			store: `
+version: 1
+records:
+  deepseek-account-platform/device:
+    kind: grant
+    payload:
+      id: 3f0c2a8e-1d4b-4e6f-9a7c-5b2d8e1f0a3c
+  deepseek-account-platform/default:
+    kind: grant
+    payload:
+      version: 1
+      token: account-token
+      issuer: https://platform.deepseek.com
+`,
+			want: ports.AgentAuthStatusAuthorized,
+		},
+		{
+			// Sign-out removes the grant but keeps the device record.
+			name: "device record left after sign-out",
+			store: `
+version: 1
+records:
+  deepseek-account-platform/device:
+    kind: grant
+    payload:
+      id: 3f0c2a8e-1d4b-4e6f-9a7c-5b2d8e1f0a3c
+`,
+			want: ports.AgentAuthStatusUnknown,
+		},
+		{
+			name: "account grant without a token",
+			store: `
+version: 1
+records:
+  deepseek-account-platform/default:
+    kind: grant
+    payload:
+      version: 1
+      token: ""
+`,
+			want: ports.AgentAuthStatusUnknown,
+		},
+		{
+			// What a signed-out Harness that opened the web UI holds.
+			name: "browser session only",
+			store: `
+version: 1
+records:
+  client-connection/browser-session:
+    kind: exact
+    payload:
+      version: 1
+      secret: session-secret
+`,
+			want: ports.AgentAuthStatusUnknown,
+		},
+		{
 			// The pre-release flat layout. Harness refuses to load a document
 			// with no `version: 1`, and the failure takes its whole credentials
 			// service down, so reading this as authorization would badge the
@@ -329,6 +391,46 @@ refs:
 			}
 			if status != tc.want {
 				t.Fatalf("status = %q, want %q", status, tc.want)
+			}
+		})
+	}
+}
+
+// TestAuthStatusRecordsHowDeepSeekIsSignedIn keeps an account sign-in from being
+// reported as an API key, and an API key ahead of the account: the default
+// "deepseek-official" route uses the key.
+func TestAuthStatusRecordsHowDeepSeekIsSignedIn(t *testing.T) {
+	t.Setenv(deepseekCredentialKey, "")
+	accountGrant := `
+  deepseek-account-platform/default:
+    kind: grant
+    payload:
+      version: 1
+      token: account-token
+      issuer: https://platform.deepseek.com
+`
+	for _, tc := range []struct {
+		name  string
+		store string
+		want  domain.AgentAccountMethod
+	}{
+		{name: "account only", store: "version: 1\nrecords:" + accountGrant, want: domain.AgentAccountMethodAccount},
+		{name: "api key and account", store: "version: 1\nrefs:\n  DEEPSEEK_API_KEY: sk-live\nrecords:" + accountGrant, want: domain.AgentAccountMethodAPIKey},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), ".credentials.yaml")
+			if err := os.WriteFile(path, []byte(tc.store), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv(credentialsPathEnv, path)
+			ctx, evidence := ports.WithAuthEvidence(context.Background())
+			status, err := (&Plugin{resolvedBinary: "dsh"}).AuthStatus(ctx)
+			if err != nil || status != ports.AgentAuthStatusAuthorized {
+				t.Fatalf("status = (%q, %v), want authorized", status, err)
+			}
+			want := authprobe.FileSource(path).WithMethod(tc.want)
+			if got := evidence.Identity(); got != want {
+				t.Fatalf("evidence = %+v, want %+v", got, want)
 			}
 		})
 	}
