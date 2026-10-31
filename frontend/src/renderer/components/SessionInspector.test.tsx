@@ -5062,6 +5062,21 @@ describe("SessionInspector branch summary", () => {
 
   });
 
+  it("opens the checked-out PR once its details load, not the first one listed", async () => {
+    const other = prSummary(7, "open");
+    const checkedOut = prSummary(8, "open", { sourceBranch: "feat/ns" });
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [other, checkedOut] });
+    // No seeded summaries: the first render only has the session's PR facts.
+    // The same URLs as the summaries, so each section stays mounted as they load.
+    const facts = [other, checkedOut].map((summary) => pr(summary.number, "open", { url: summary.url }));
+    renderWithQuery(<SessionInspector session={session(facts, { branch: "feat/renamed", branchState: lineageBranch })} />);
+
+    const sections = await screen.findByTestId("pr-sections");
+    const header = (label: string) => within(sections).getByText(label).closest("button") as HTMLElement;
+    await waitFor(() => expect(header("PR #8")).toHaveAttribute("aria-expanded", "true"));
+    expect(header("PR #7")).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("keeps the branch rows under the cards when no PR is open", async () => {
     mockGitState({ uncommitted: [changedFile("src/c.ts", 4, 0)] });
     renderWithQuery(<SessionInspector session={session([pr(7, "merged")])} />);

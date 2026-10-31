@@ -977,12 +977,14 @@ export function PRSummaryCard({
 }) {
 	const { t } = useTranslation();
 	const stateKey = `${hostId ?? ""}:${sessionId}:${pr.url || pr.number}`;
-	// The PR new commits update starts open, every other PR folded; a toggle is remembered.
-	const [expanded, setExpandedState] = useState(() => prExpansion.get(stateKey) ?? current);
-	const toggle = () => setExpandedState((open) => {
-		prExpansion.set(stateKey, !open);
-		return !open;
-	});
+	// The PR new commits update is open, every other PR folded; a toggle is remembered.
+	// Until one, it follows current, which settles once the PR details load.
+	const [choice, setChoice] = useState<boolean | undefined>(() => prExpansion.get(stateKey));
+	const expanded = choice ?? current;
+	const toggle = () => {
+		prExpansion.set(stateKey, !expanded);
+		setChoice(!expanded);
+	};
 	const bodyId = useId();
 	const reduceMotion = useReducedMotion();
 	const queryClient = useQueryClient();
