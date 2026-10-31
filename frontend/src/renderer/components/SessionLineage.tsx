@@ -3,6 +3,7 @@ import { ChevronRight } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useId, useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { sessionWorkspaceHistoryQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { formatTimeCompact } from "../lib/format-time";
 import { sessionBranchPresentation } from "../lib/session-branch";
@@ -48,14 +49,6 @@ export function SessionLineage({
 	session: WorkspaceSession;
 }) {
 	const { t } = useTranslation();
-	const reduceMotion = useReducedMotion();
-	const bodyId = useId();
-	const stateKey = `${hostId ?? ""}:${session.id}`;
-	const [expanded, setExpanded] = useState(() => lineageExpansion.get(stateKey) ?? true);
-	const toggle = () => {
-		lineageExpansion.set(stateKey, !expanded);
-		setExpanded(!expanded);
-	};
 	const commitCount = session.branchState?.commits ?? 0;
 	// The base the daemon counted against; without one there is no split to draw.
 	const base = session.branchState?.base ?? "";
@@ -69,11 +62,73 @@ export function SessionLineage({
 		placeholderData: (previous) => previous,
 		enabled: drawable,
 	});
-	const all: LineageCommit[] = (history.data?.commits ?? []).map((commit) => ({ sha: commit.sha, subject: commit.subject }));
-	if (!drawable || all.length === 0) return null;
+	const commits: LineageCommit[] = (history.data?.commits ?? []).map((commit) => ({ sha: commit.sha, subject: commit.subject }));
+	if (!drawable || commits.length === 0) return null;
+	const topLabel = mergedAt
+		? t("inspector.git.mergedInto", { base, time: formatTimeCompact(mergedAt) })
+		: behind > 0
+			? t("inspector.git.baseMoved", { count: behind })
+			: undefined;
+	return <LineageGraph base={base} commits={commits} mergedAt={mergedAt} stateKey={`${hostId ?? ""}:${session.id}`} topLabel={topLabel} total={commitCount} />;
+}
+
+/**
+ * A PR's lineage when its branch is not the one checked out: the commits the
+ * provider reported for it, splitting from its target branch. How far the
+ * target moved since is only known for the checked-out branch.
+ */
+export function PRLineage({ className, hostId, pr, sessionId }: { className?: string; hostId?: string; pr: SessionPRSummary; sessionId: string }) {
+	const { t } = useTranslation();
+	const base = pr.targetBranch;
+	// The provider lists them oldest first; the lane reads newest first. Daemons
+	// that predate PR details send none.
+	const commits: LineageCommit[] = [...(pr.commits ?? [])].reverse().map((commit) => ({ sha: commit.sha, subject: commit.headline }));
+	if (!base || commits.length === 0) return null;
+	const mergedAt = pr.state === "merged" ? pr.stateChangedAt ?? undefined : undefined;
+	return (
+		<LineageGraph
+			base={base}
+			className={className}
+			commits={commits}
+			mergedAt={mergedAt}
+			stateKey={`${hostId ?? ""}:${sessionId}:${pr.url || pr.number}`}
+			topLabel={mergedAt ? t("inspector.git.mergedInto", { base, time: formatTimeCompact(mergedAt) }) : undefined}
+			total={pr.commitCount}
+		/>
+	);
+}
+
+function LineageGraph({
+	base,
+	className = "mt-3",
+	commits: all,
+	mergedAt,
+	stateKey,
+	topLabel,
+	total,
+}: {
+	base: string;
+	className?: string;
+	/** Newest first. */
+	commits: LineageCommit[];
+	mergedAt?: string;
+	/** Remembers whether this lineage is folded. */
+	stateKey: string;
+	topLabel?: string;
+	/** Commits on the branch, which can exceed the ones listed. */
+	total: number;
+}) {
+	const { t } = useTranslation();
+	const reduceMotion = useReducedMotion();
+	const bodyId = useId();
+	const [expanded, setExpanded] = useState(() => lineageExpansion.get(stateKey) ?? true);
+	const toggle = () => {
+		lineageExpansion.set(stateKey, !expanded);
+		setExpanded(!expanded);
+	};
 
 	const shown = all.slice(0, LINEAGE_COMMITS_SHOWN);
-	const hidden = Math.max(commitCount, all.length) - shown.length;
+	const hidden = Math.max(total, all.length) - shown.length;
 	const lastRow = shown.length + 1;
 	const y = (row: number) => row * ROW + ROW / 2;
 	const height = (lastRow + 1) * ROW;
@@ -82,14 +137,8 @@ export function SessionLineage({
 	const splitY = y(lastRow);
 	const topY = y(0);
 
-	const topLabel = mergedAt
-		? t("inspector.git.mergedInto", { base, time: formatTimeCompact(mergedAt) })
-		: behind > 0
-			? t("inspector.git.baseMoved", { count: behind })
-			: undefined;
-
 	return (
-		<div className="mt-3 flex min-w-0 flex-col" data-testid="session-lineage">
+		<div className={cn("flex min-w-0 flex-col", className)} data-testid="session-lineage">
 			<button
 				aria-controls={expanded ? bodyId : undefined}
 				aria-expanded={expanded}

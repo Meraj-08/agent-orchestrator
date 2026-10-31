@@ -65,6 +65,7 @@ import { latestScriptRun } from "../lib/cloud-script-runs";
 import { ResumeAgentControl } from "./ResumeAgentControl";
 import { SessionBranchSummary, type BranchWork } from "./SessionBranchSummary";
 import { SessionAccountSummary } from "./SessionAccountSummary";
+import { PRLineage } from "./SessionLineage";
 import {
 	sessionScmSummaryQueryKey,
 	useSessionScmSummary,
@@ -1133,7 +1134,12 @@ export function PRSummaryCard({
 						transition={reduceMotion ? { duration: 0 } : { duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
 					>
 						{cardView}
-						{work ? <div className="flex min-w-0 flex-col border-t border-(--color-border-settings-input) pt-2 pb-2">{work.content}</div> : null}
+						{work ? (
+							<div className="flex min-w-0 flex-col border-t border-(--color-border-settings-input) pt-2 pb-2">{work.content}</div>
+						) : (
+							// Not the branch checked out: its lineage comes from the provider's commits.
+							<PRLineage className="border-t border-(--color-border-settings-input) pt-1 pb-1" hostId={hostId} pr={pr} sessionId={sessionId} />
+						)}
 					</motion.div>
 				) : null}
 			</AnimatePresence>

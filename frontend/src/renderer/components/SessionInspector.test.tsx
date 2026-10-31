@@ -5062,6 +5062,35 @@ describe("SessionInspector branch summary", () => {
 
   });
 
+  it("gives every PR its own lineage: the checked-out one from the worktree, the rest from the provider", async () => {
+    const checkedOut = prSummary(7, "open", { sourceBranch: "feat/ns" });
+    const other = prSummary(8, "open", {
+      commits: [{ sha: "c1", headline: "add search" }, { sha: "c2", headline: "fix the search shortcut" }],
+      commitCount: 2,
+    });
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], history: ["second change", "first change"], prs: [checkedOut, other] });
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "open"), pr(8, "open")], { branchState: lineageBranch })} />,
+      undefined,
+      (client) => seedPRSummaries(client, [checkedOut, other]),
+    );
+
+    const sections = await screen.findByTestId("pr-sections");
+    const sectionOf = (label: string) => within(sections).getByText(label).closest("section") as HTMLElement;
+    const ownLineage = await within(sectionOf("PR #7")).findByTestId("session-lineage");
+    expect(within(ownLineage).getByText("second change")).toBeInTheDocument();
+
+    await userEvent.click(within(sections).getByText("PR #8").closest("button") as HTMLElement);
+    const otherLineage = await within(sectionOf("PR #8")).findByTestId("session-lineage");
+    expect(within(otherLineage).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "main",
+      "fix the search shortcut",
+      "add search",
+      "split from main",
+    ]);
+    expect(within(sectionOf("PR #8")).queryByRole("button", { name: /^Commit & push/ })).not.toBeInTheDocument();
+  });
+
   it("opens the checked-out PR once its details load, not the first one listed", async () => {
     const other = prSummary(7, "open");
     const checkedOut = prSummary(8, "open", { sourceBranch: "feat/ns" });
