@@ -8,6 +8,7 @@ import {
 	prDiffSummary,
 	prStatusRows,
 	prSummaryParts,
+	sessionBranchPR,
 	sessionPRDisplaySummaries,
 } from "./pr-display";
 
@@ -172,6 +173,34 @@ describe("sessionPRDisplaySummaries", () => {
 		const result = sessionPRDisplaySummaries(session, summaries);
 
 		expect(result.map((r) => r.number).sort((a, b) => a - b)).toEqual([7, 8]);
+	});
+});
+
+describe("sessionBranchPR", () => {
+	const quickNav = summary({ number: 4, sourceBranch: "ao/quick-nav", headSha: "5b20471" });
+	const faq = summary({ number: 5, state: "draft", sourceBranch: "ao/faq-questions", headSha: "614aaa3" });
+	const branch = (state: Partial<NonNullable<WorkspaceSession["branchState"]>>) =>
+		sessionWith({ branchState: { commits: 3, unpushed: 0, behind: 0, ...state } });
+
+	it("picks the PR whose branch is checked out, not the first open one", () => {
+		expect(sessionBranchPR(branch({ remoteBranch: "origin/ao/faq-questions", head: "614aaa3" }), [quickNav, faq])?.number).toBe(5);
+	});
+
+	it("keeps the PR while local commits are not pushed yet", () => {
+		expect(sessionBranchPR(branch({ remoteBranch: "origin/ao/faq-questions", head: "new0001", unpushed: 1 }), [quickNav, faq])?.number).toBe(5);
+	});
+
+	it("matches the tip commit when the branch has no upstream", () => {
+		expect(sessionBranchPR(branch({ head: "614aaa3" }), [quickNav, faq])?.number).toBe(5);
+	});
+
+	it("finds none when the checked-out branch has no open PR", () => {
+		expect(sessionBranchPR(branch({ remoteBranch: "origin/ao/other", head: "fff0001" }), [quickNav, faq])).toBeUndefined();
+		expect(sessionBranchPR(branch({ remoteBranch: "origin/ao/faq-questions" }), [quickNav, { ...faq, state: "merged" }])).toBeUndefined();
+	});
+
+	it("falls back to the first open PR before the daemon reports the branch", () => {
+		expect(sessionBranchPR(sessionWith(), [quickNav, faq])?.number).toBe(4);
 	});
 });
 

@@ -120,6 +120,22 @@ export function sessionPRDisplaySummaries(
 	return [...fromFactsMap.values(), ...summaryOnly].sort(comparePRDisplaySummaries);
 }
 
+/**
+ * The open PR the worktree's checked-out branch belongs to, which is where new
+ * commits and pushes land. A session can list PRs from other branches, so it is
+ * matched by the pushed branch name, then by the tip commit. The first open PR
+ * stands in only while the daemon has not reported the branch.
+ */
+export function sessionBranchPR(session: WorkspaceSession, prs: SessionPRSummary[]): SessionPRSummary | undefined {
+	const open = prs.filter((pr) => pr.state === "open" || pr.state === "draft");
+	const state = session.branchState;
+	if (!state) return open[0];
+	// remoteBranch names the remote first: "origin/feat/x".
+	const pushed = state.remoteBranch?.slice(state.remoteBranch.indexOf("/") + 1);
+	return (pushed ? open.find((pr) => pr.sourceBranch === pushed) : undefined)
+		?? (state.head ? open.find((pr) => pr.headSha === state.head) : undefined);
+}
+
 // The view-only PR fields (labels, requested reviewers, commits) for a summary
 // no provider details were observed for: AO Cloud summaries, a PR known only
 // from session facts, and fixtures. detailsObservedAt stays absent, so a view
