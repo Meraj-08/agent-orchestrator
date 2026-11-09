@@ -1,0 +1,37 @@
+commit 6f4f9415ae0676f6936a9fd33a757ca33f766c22
+Author: Md Meraj Alam <154506553+Meraj-08@users.noreply.github.com>
+Date:   Mon Nov 9 16:15:51 2026 +0530
+
+    fix(desktop): keep the parked swipe arrows from scrolling the pane sideways (#8024)
+    
+    SwipeNavigation parks its arrows invisible 44px past the pane's edges. The
+    pane clips the overhang with overflow-x: hidden, which still lets code scroll
+    it (scrollIntoView, focus), so the whole centre pane could shift 44px left and
+    slide the session tab under the sidebar. Render the arrows inside an
+    absolutely positioned box with overflow: clip, which hides the overhang
+    without being scrollable. Fixes #8023.
+    
+    Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+
+diff --git a/frontend/src/renderer/components/SwipeNavigation.tsx b/frontend/src/renderer/components/SwipeNavigation.tsx
+index 52354e597b..44336be943 100644
+--- a/frontend/src/renderer/components/SwipeNavigation.tsx
++++ b/frontend/src/renderer/components/SwipeNavigation.tsx
+@@ -268,11 +268,15 @@ export function SwipeNavigation({
+ 
+ 	if (!enabled) return null;
+ 
++	// The pucks rest just past the pane's edges. Clip them in a box that cannot
++	// scroll: a container with overflow hidden can still be scrolled by code
++	// (scrollIntoView, focus), and 44px of overhang would then slide the whole
++	// pane sideways under the sidebar.
+ 	return (
+-		<>
++		<div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-clip" data-swipe-pucks="">
+ 			<SwipePuck direction="back" puckRef={backRef} />
+ 			<SwipePuck direction="forward" puckRef={forwardRef} />
+-		</>
++		</div>
+ 	);
+ }
+ 
