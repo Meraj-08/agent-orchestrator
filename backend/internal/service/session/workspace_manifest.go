@@ -155,19 +155,26 @@ func (s *Service) workspaceProjectManifest(ctx context.Context, rec domain.Sessi
 			return resolveWorkspaceProjectCompare(rctx, row.WorktreePath, row.BaseSHA, baseRef)
 		}
 		compare, changes, err := s.resolveWorkspaceChanges(ctx, rec.ID, row.WorktreePath, resolve)
+		if workspaceChildUnavailable(prefix, err) {
+			continue
+		}
 		if err != nil {
 			return WorkspaceManifest{}, err
+		}
+		var repoUncommitted []WorkspaceFileSummary
+		if uncommittedErr == nil {
+			repoUncommitted, err = workspaceUncommittedFiles(ctx, row.WorktreePath, prefix, exclude)
+			if workspaceChildUnavailable(prefix, err) {
+				continue
+			}
+			uncommittedErr = err
 		}
 		paths, repoTruncated := mergeWorkspaceFilePaths(nil, changes.changedPaths())
 		repoFiles := buildWorkspaceFileSummaries(row.WorktreePath, prefix, exclude, paths, changes)
 		compares = append(compares, compare)
 		files, truncated = appendWorkspaceFilesWithCap(files, repoFiles, truncated)
 		truncated = truncated || repoTruncated
-		if uncommittedErr == nil {
-			var repoUncommitted []WorkspaceFileSummary
-			repoUncommitted, uncommittedErr = workspaceUncommittedFiles(ctx, row.WorktreePath, prefix, exclude)
-			uncommitted = append(uncommitted, repoUncommitted...)
-		}
+		uncommitted = append(uncommitted, repoUncommitted...)
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	compare := aggregateWorkspaceCompare(compares)

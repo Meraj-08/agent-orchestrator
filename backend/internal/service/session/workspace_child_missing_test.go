@@ -2,12 +2,14 @@ package session
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // A child repository moved after the session started leaves the session's
@@ -47,8 +49,8 @@ func TestWorkspaceFilesSkipChildRepoMissingFromDisk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWorkspaceFiles = %v, want the root listed", err)
 	}
-	if !files.Degraded || files.DegradedCode != workspaceChildRepoUnavailableCode {
-		t.Fatalf("degraded = %v code %q, want %q", files.Degraded, files.DegradedCode, workspaceChildRepoUnavailableCode)
+	if files.Degraded || files.Sections.Uncommitted == nil {
+		t.Fatalf("degraded = %v (%s), uncommitted = %v; want complete sections for the remaining repos", files.Degraded, files.DegradedCode, files.Sections.Uncommitted)
 	}
 	found := false
 	for _, f := range files.Files {
@@ -59,5 +61,36 @@ func TestWorkspaceFilesSkipChildRepoMissingFromDisk(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("files = %#v, want root.txt", files.Files)
+	}
+
+	manifest, err := (&Service{store: st}).computeWorkspaceManifest(context.Background(), "ws-1")
+	if err != nil {
+		t.Fatalf("workspace manifest = %v, want the root listed", err)
+	}
+	if manifest.Degraded {
+		t.Fatalf("manifest degraded = %v (%s), want complete sections for the remaining repos", manifest.Degraded, manifest.DegradedCode)
+	}
+	if manifest.WorkspaceVersion != files.WorkspaceVersion {
+		t.Fatalf("manifest version %q != files version %q", manifest.WorkspaceVersion, files.WorkspaceVersion)
+	}
+}
+
+// The root itself being gone is still a whole-workspace failure.
+func TestWorkspaceFilesRootRepoMissingStillFails(t *testing.T) {
+	source := newWorkspaceRepo(t)
+	base := strings.TrimSpace(runGit(t, source, "rev-parse", "HEAD"))
+	root := filepath.Join(t.TempDir(), "root-wt")
+	runGit(t, source, "worktree", "add", "-b", "ao/work", root)
+	if err := os.RemoveAll(source); err != nil {
+		t.Fatal(err)
+	}
+	st := newFakeStore()
+	st.projects["ws"] = domain.ProjectRecord{ID: "ws", Kind: domain.ProjectKindWorkspace}
+	st.sessions["ws-1"] = domain.SessionRecord{ID: "ws-1", ProjectID: "ws", Metadata: domain.SessionMetadata{WorkspacePath: root}}
+	st.worktrees["ws-1"] = []domain.SessionWorktreeRecord{
+		{SessionID: "ws-1", RepoName: domain.RootWorkspaceRepoName, WorktreePath: root, BaseSHA: base},
+	}
+	if _, err := (&Service{store: st}).ListWorkspaceFiles(context.Background(), "ws-1"); !errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
+		t.Fatalf("ListWorkspaceFiles = %v, want ErrWorkspaceRepoUnavailable", err)
 	}
 }

@@ -1072,7 +1072,6 @@ func (s *Service) listWorkspaceProjectFiles(ctx context.Context, rec domain.Sess
 	var uncommittedErr error
 	truncated := false
 	compares := make([]workspaceCompareTarget, 0, len(rows))
-	childUnavailable := false
 	for _, row := range rows {
 		if strings.TrimSpace(row.WorktreePath) == "" {
 			continue
@@ -1095,28 +1094,24 @@ func (s *Service) listWorkspaceProjectFiles(ctx context.Context, rec domain.Sess
 			return resolveWorkspaceProjectCompare(rctx, row.WorktreePath, row.BaseSHA, baseRef)
 		}
 		repoFiles, repoTruncated, compare, err := s.workspaceFileSummariesCached(ctx, rec.ID, row.WorktreePath, prefix, exclude, resolve)
+		if workspaceChildUnavailable(prefix, err) {
+			continue
+		}
 		if err != nil {
-			// A child repository moved or deleted after the session started
-			// must not hide the root and the healthy children. The root
-			// being gone still fails the whole listing.
-			if prefix != "" && errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
-				childUnavailable = true
+			return WorkspaceFiles{}, err
+		}
+		var repoUncommitted []WorkspaceFileSummary
+		if uncommittedErr == nil {
+			repoUncommitted, err = workspaceUncommittedFiles(ctx, row.WorktreePath, prefix, exclude)
+			if workspaceChildUnavailable(prefix, err) {
 				continue
 			}
-			return WorkspaceFiles{}, err
+			uncommittedErr = err
 		}
 		compares = append(compares, compare)
 		files, truncated = appendWorkspaceFilesWithCap(files, repoFiles, truncated)
 		truncated = truncated || repoTruncated
-		if uncommittedErr == nil {
-			repoUncommitted, err := workspaceUncommittedFiles(ctx, row.WorktreePath, prefix, exclude)
-			if err != nil && prefix != "" && errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
-				childUnavailable = true
-				continue
-			}
-			uncommittedErr = err
-			uncommitted = append(uncommitted, repoUncommitted...)
-		}
+		uncommitted = append(uncommitted, repoUncommitted...)
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	compare := aggregateWorkspaceCompare(compares)
@@ -1138,16 +1133,20 @@ func (s *Service) listWorkspaceProjectFiles(ctx context.Context, rec domain.Sess
 	}
 	sort.Slice(uncommitted, func(i, j int) bool { return uncommitted[i].Path < uncommitted[j].Path })
 	result.Sections.Uncommitted = uncommitted
-	if childUnavailable {
-		result.Degraded = true
-		result.DegradedCode = workspaceChildRepoUnavailableCode
-	}
 	return result, nil
 }
 
-// workspaceChildRepoUnavailableCode marks a workspace listing that left out a
-// child repository whose source is no longer on disk.
-const workspaceChildRepoUnavailableCode = "WORKSPACE_CHILD_REPO_UNAVAILABLE"
+// workspaceChildUnavailable reports that err comes from a child repository
+// (non-empty prefix) whose source was moved or deleted after the session
+// started. Such a child is left out, like a child that was never checked out,
+// so the root and the healthy children stay listed. It is not reported as
+// Degraded: the remaining repositories' sections are complete, and Degraded
+// would switch the review to its legacy scope and poll every 30 seconds for a
+// child that is not coming back. The root being gone (empty prefix) still
+// fails the whole listing.
+func workspaceChildUnavailable(prefix string, err error) bool {
+	return prefix != "" && errors.Is(err, ports.ErrWorkspaceRepoUnavailable)
+}
 
 func (s *Service) resolveWorkspaceProjectFileTarget(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord, rel string, withCompare bool) (workspaceFileTarget, error) {
 	rows, err := s.store.ListSessionWorktrees(ctx, rec.ID)
