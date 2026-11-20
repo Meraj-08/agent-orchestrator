@@ -1072,6 +1072,7 @@ func (s *Service) listWorkspaceProjectFiles(ctx context.Context, rec domain.Sess
 	var uncommittedErr error
 	truncated := false
 	compares := make([]workspaceCompareTarget, 0, len(rows))
+	childUnavailable := false
 	for _, row := range rows {
 		if strings.TrimSpace(row.WorktreePath) == "" {
 			continue
@@ -1095,14 +1096,25 @@ func (s *Service) listWorkspaceProjectFiles(ctx context.Context, rec domain.Sess
 		}
 		repoFiles, repoTruncated, compare, err := s.workspaceFileSummariesCached(ctx, rec.ID, row.WorktreePath, prefix, exclude, resolve)
 		if err != nil {
+			// A child repository moved or deleted after the session started
+			// must not hide the root and the healthy children. The root
+			// being gone still fails the whole listing.
+			if prefix != "" && errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
+				childUnavailable = true
+				continue
+			}
 			return WorkspaceFiles{}, err
 		}
 		compares = append(compares, compare)
 		files, truncated = appendWorkspaceFilesWithCap(files, repoFiles, truncated)
 		truncated = truncated || repoTruncated
 		if uncommittedErr == nil {
-			var repoUncommitted []WorkspaceFileSummary
-			repoUncommitted, uncommittedErr = workspaceUncommittedFiles(ctx, row.WorktreePath, prefix, exclude)
+			repoUncommitted, err := workspaceUncommittedFiles(ctx, row.WorktreePath, prefix, exclude)
+			if err != nil && prefix != "" && errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
+				childUnavailable = true
+				continue
+			}
+			uncommittedErr = err
 			uncommitted = append(uncommitted, repoUncommitted...)
 		}
 	}
@@ -1126,8 +1138,16 @@ func (s *Service) listWorkspaceProjectFiles(ctx context.Context, rec domain.Sess
 	}
 	sort.Slice(uncommitted, func(i, j int) bool { return uncommitted[i].Path < uncommitted[j].Path })
 	result.Sections.Uncommitted = uncommitted
+	if childUnavailable {
+		result.Degraded = true
+		result.DegradedCode = workspaceChildRepoUnavailableCode
+	}
 	return result, nil
 }
+
+// workspaceChildRepoUnavailableCode marks a workspace listing that left out a
+// child repository whose source is no longer on disk.
+const workspaceChildRepoUnavailableCode = "WORKSPACE_CHILD_REPO_UNAVAILABLE"
 
 func (s *Service) resolveWorkspaceProjectFileTarget(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord, rel string, withCompare bool) (workspaceFileTarget, error) {
 	rows, err := s.store.ListSessionWorktrees(ctx, rec.ID)

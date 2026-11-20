@@ -1895,3 +1895,30 @@ func TestWorkspaceIntegrationDestroyStaleAddLockStillPreservesDirtyWork(t *testi
 		t.Fatalf("dirty work lost: %v", err)
 	}
 }
+
+func TestWorkspaceIntegrationWorkspaceProjectSkipsChildRepoMissingFromDisk(t *testing.T) {
+	git := requireGit(t)
+	tmp := t.TempDir()
+	rootRepo := setupOriginClone(t, git, filepath.Join(tmp, "root"))
+	childRepo := setupOriginClone(t, git, filepath.Join(tmp, "repo-a"))
+	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": rootRepo}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := ws.CreateWorkspaceProject(context.Background(), ports.WorkspaceProjectConfig{
+		ProjectID: "proj", SessionID: "moved", Kind: domain.KindWorker, Branch: "ao/moved",
+		RootRepoPath: rootRepo, BaseBranch: "main",
+		Repos: []ports.WorkspaceProjectRepoConfig{
+			{Name: "repo-a", RelativePath: "repo-a", RepoPath: childRepo, BaseBranch: "main"},
+			// Registered, then moved to ops/repo-b.
+			{Name: "repo-b", RelativePath: "repo-b", RepoPath: filepath.Join(tmp, "repo-b"), BaseBranch: "main"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkspaceProject = %v, want the session to start without the moved child", err)
+	}
+	defer func() { _ = ws.DestroyWorkspaceProject(context.Background(), info) }()
+	if len(info.Worktrees) != 2 || info.Worktrees[1].RepoName != "repo-a" {
+		t.Fatalf("worktrees = %#v, want root and repo-a", info.Worktrees)
+	}
+}

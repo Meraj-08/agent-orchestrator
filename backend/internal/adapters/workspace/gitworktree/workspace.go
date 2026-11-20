@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -476,6 +477,12 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 		baseBranch: cfg.BaseBranch,
 	})
 	for _, child := range cfg.Repos {
+		if _, err := os.Stat(child.RepoPath); errors.Is(err, fs.ErrNotExist) {
+			// A child moved or deleted after registration would otherwise fail
+			// every start with git exit 128; the session starts without it.
+			w.logf("gitworktree: workspace child repo %q is no longer at %s; starting without it", child.Name, child.RepoPath)
+			continue
+		}
 		repoPath, err := physicalAbs(child.RepoPath)
 		if err != nil {
 			return ports.WorkspaceProjectInfo{}, fmt.Errorf("gitworktree: child repo %q path: %w", child.Name, err)
